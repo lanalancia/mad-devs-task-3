@@ -1,0 +1,10 @@
+---
+description: What AI agent should do, what shouldn't do
+alwaysApply: true
+---
+
+Simple rules to keep project clean.
+
+1. Don't edit task.md, diary.md and decisions.md. You can read them, but can't edit.
+
+
