@@ -1,0 +1,9 @@
+---
+description: Code style across this project
+alwaysApply: true
+---
+
+
+1. Code and comments should be written in English.
+2. All the prints and console logs should be in English.
+
