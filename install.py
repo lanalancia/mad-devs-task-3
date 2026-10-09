@@ -18,6 +18,10 @@ VOLUME_NAME = "mad-devs-postgres"
 
 ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "config.ini"
+SCHEMA_PATH = ROOT / "backend" / "schema.sql"
+POLL_ENTRIES_PATH = ROOT / "init-poll-entries.json"
+USERS_PATH = ROOT / "init-users.json"
+APPLICATION_TABLES = ("poll_entries", "poll_history", "users")
 
 DEFAULTS = {
     "host": "localhost",
@@ -246,6 +250,175 @@ def wait_until_ready(user: str) -> bool:
     return False
 
 
+def psql(user: str, database: str, statement: str) -> subprocess.CompletedProcess[str] | None:
+    try:
+        return subprocess.run(
+            [
+                "docker",
+                "exec",
+                "-i",
+                CONTAINER_NAME,
+                "psql",
+                "-v",
+                "ON_ERROR_STOP=1",
+                "-U",
+                user,
+                "-d",
+                database,
+                "-t",
+                "-A",
+            ],
+            input=statement,
+            text=True,
+            capture_output=True,
+        )
+    except FileNotFoundError:
+        return None
+
+
+def sql_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def existing_application_tables(user: str, database: str) -> list[str] | None:
+    names = ", ".join(sql_literal(name) for name in APPLICATION_TABLES)
+    statement = (
+        "SELECT table_name FROM information_schema.tables "
+        "WHERE table_schema = 'public' AND table_name IN "
+        f"({names}) ORDER BY table_name;"
+    )
+    completed = psql(user, database, statement)
+    if completed is None or completed.returncode != 0:
+        detail = ""
+        if completed is not None:
+            detail = (completed.stderr or completed.stdout or "").strip()
+        print("Failed to read application tables.")
+        if detail:
+            print(detail)
+        return None
+    return [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+
+
+def load_json_list(path: Path) -> list | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"Failed to read {path.name}: {exc}")
+        return None
+    if not isinstance(payload, list):
+        print(f"{path.name} must contain a list.")
+        return None
+    return payload
+
+
+def require_positive_int(item: dict, key: str, url: str) -> int | None:
+    value = item.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        print(f"{key} for {url} must be an integer of at least 1.")
+        return None
+    return value
+
+
+def parse_poll_entry(item: object) -> tuple[str, int, int, int, str] | None:
+    if not isinstance(item, dict):
+        print("Each poll entry in init-poll-entries.json must be an object.")
+        return None
+    url = item.get("url")
+    if not isinstance(url, str) or not url.strip():
+        print("A poll entry is missing a url.")
+        return None
+    status = item.get("polling_status")
+    if status not in {"ACTIVE", "PAUSED"}:
+        print(f"Polling status for {url} must be ACTIVE or PAUSED.")
+        return None
+    timeout = require_positive_int(item, "timeout", url)
+    interval = require_positive_int(item, "polling_rate", url)
+    expected = require_positive_int(item, "expected_code", url)
+    if timeout is None or interval is None or expected is None:
+        return None
+    return url, timeout, interval, expected, status
+
+
+def parse_user(item: object) -> tuple[str, str] | None:
+    if not isinstance(item, dict):
+        print("Each user in init-users.json must be an object.")
+        return None
+    username = item.get("username")
+    password = item.get("password")
+    if not isinstance(username, str) or not username:
+        print("A user is missing a username.")
+        return None
+    if not isinstance(password, str):
+        print(f"Password for {username} must be a string.")
+        return None
+    return username, password
+
+
+def seed_statements() -> list[str] | None:
+    entries = load_json_list(POLL_ENTRIES_PATH)
+    users = load_json_list(USERS_PATH)
+    if entries is None or users is None:
+        return None
+    statements: list[str] = []
+    for item in entries:
+        parsed = parse_poll_entry(item)
+        if parsed is None:
+            return None
+        url, timeout, interval, expected, status = parsed
+        statements.append(
+            "INSERT INTO poll_entries "
+            "(url, timeout_seconds, interval_seconds, expected_code, status) VALUES ("
+            f"{sql_literal(url)}, {timeout}, {interval}, {expected}, {sql_literal(status)});"
+        )
+    for item in users:
+        parsed_user = parse_user(item)
+        if parsed_user is None:
+            return None
+        username, password = parsed_user
+        statements.append(
+            "INSERT INTO users (username, password) VALUES ("
+            f"{sql_literal(username)}, {sql_literal(password)});"
+        )
+    return statements
+
+
+def setup_application_database(user: str, database: str) -> bool:
+    present = existing_application_tables(user, database)
+    if present is None:
+        return False
+    dropping = ""
+    if present:
+        print("Application tables already exist: " + ", ".join(present) + ".")
+        if not ask_yes_no(
+            "Reinstall the database on this step? "
+            "This deletes poll entries, history, and users, then loads the seed again"
+        ):
+            print("Existing tables left unchanged.")
+            return True
+        dropping = "DROP TABLE IF EXISTS poll_history, poll_entries, users CASCADE;\n"
+    try:
+        schema = SCHEMA_PATH.read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f"Failed to read {SCHEMA_PATH.name}: {exc}")
+        return False
+    seed = seed_statements()
+    if seed is None:
+        return False
+    print("Creating application tables and loading the seed.")
+    statement = "BEGIN;\n" + dropping + schema + "\n" + "\n".join(seed) + "\nCOMMIT;\n"
+    completed = psql(user, database, statement)
+    if completed is None or completed.returncode != 0:
+        detail = ""
+        if completed is not None:
+            detail = (completed.stderr or completed.stdout or "").strip()
+        print("Failed to create application tables.")
+        if detail:
+            print(detail)
+        return False
+    print("Application tables are ready.")
+    return True
+
+
 def install_postgresql(current: dict[str, str]) -> None:
     if not docker_engine_ready():
         return
@@ -270,8 +443,17 @@ def install_postgresql(current: dict[str, str]) -> None:
         print("The container is up, but PostgreSQL is not accepting connections yet.")
         if not ask_yes_no("Save the connection anyway"):
             return
+        save_config(values)
+        print("Password saved to config.ini. Do not commit this file with a real password.")
+        print(f"PostgreSQL is running in Docker as {CONTAINER_NAME}.")
+        print("Application tables were not created because PostgreSQL is not ready.")
+        return
     save_config(values)
     print("Password saved to config.ini. Do not commit this file with a real password.")
+    if not setup_application_database(values["user"], values["database"]):
+        print(f"PostgreSQL is running in Docker as {CONTAINER_NAME}.")
+        print("Application tables were not created.")
+        return
     print(f"PostgreSQL is running in Docker as {CONTAINER_NAME}.")
 
 
@@ -298,6 +480,7 @@ def configure_existing_database(current: dict[str, str]) -> None:
     values["user"] = ask_text("User", current["user"] or "postgres")
     values["password"] = ask_password("Password: ")
     save_config(values)
+    print("Existing database connection saved. Application tables were not created.")
 
 
 class Installer:

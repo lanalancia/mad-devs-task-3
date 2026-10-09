@@ -1,3 +1,5 @@
 storage/
 .venv/
+__pycache__/
+*.pyc
 

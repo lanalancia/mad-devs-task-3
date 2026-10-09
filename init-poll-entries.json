@@ -1,0 +1,16 @@
+[
+  {
+    "url": "https://www.google.com",
+    "timeout": 5,
+    "polling_rate": 30,
+    "expected_code": 200,
+    "polling_status": "ACTIVE"
+  },
+  {
+    "url": "http://aylfgktaggndajwyndgaydgahpdawpdhmawnydghmawnygdoamndhawm.com/",
+    "timeout": 5,
+    "polling_rate": 30,
+    "expected_code": 200,
+    "polling_status": "ACTIVE"
+  }
+]

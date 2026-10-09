@@ -1,39 +1,88 @@
 @echo off
+setlocal EnableExtensions
 cd /d "%~dp0"
 
-if exist ".venv\Scripts\python.exe" goto activate
+call :ensure_venv
+if errorlevel 1 exit /b 1
 
+call :ensure_deps
+if errorlevel 1 exit /b 1
+
+:menu
+echo.
+echo Services:
+echo   1. backend+db+smtp
+echo   2. frontend
+echo   3. mock-website
+echo.
+set /p CHOICE=Start service: 
+if "%CHOICE%"=="1" goto start_backend
+if "%CHOICE%"=="2" goto unavailable
+if "%CHOICE%"=="3" goto unavailable
+echo Unknown service. Enter 1, 2, or 3. The valid service in this step is 1.
+goto menu
+
+:unavailable
+echo This service is not available in this step.
+goto menu
+
+:start_backend
+call :ensure_db
+if errorlevel 1 goto menu
+echo Starting backend. SMTP is not started in this step.
+.venv\Scripts\python.exe -m backend
+echo Backend stopped.
+goto menu
+
+:ensure_venv
+if exist ".venv\Scripts\python.exe" exit /b 0
 echo Creating virtual environment...
-
 where py >nul 2>&1
 if errorlevel 1 goto try_python
-
 py -3 -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"
 if errorlevel 1 goto try_python
-
 py -3 -m venv .venv
-if exist ".venv\Scripts\python.exe" goto activate
+if exist ".venv\Scripts\python.exe" exit /b 0
 
 :try_python
 python -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"
 if errorlevel 1 goto need_python
-
 python -m venv .venv
-if exist ".venv\Scripts\python.exe" goto activate
-
+if exist ".venv\Scripts\python.exe" exit /b 0
 echo Failed to create the virtual environment.
-pause
 exit /b 1
 
 :need_python
 echo Python 3.10 or newer is required.
-pause
 exit /b 1
 
-:activate
-call "%~dp0.venv\Scripts\activate.bat"
-echo.
-echo Virtual environment is active.
-echo Run: python install.py
-echo.
-cmd /k
+:ensure_deps
+.venv\Scripts\python.exe -c "import psycopg" >nul 2>&1
+if not errorlevel 1 exit /b 0
+echo Installing Python packages...
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+if errorlevel 1 (
+    echo Failed to install Python packages.
+    exit /b 1
+)
+exit /b 0
+
+:ensure_db
+docker start mad-devs-postgres >nul 2>&1
+if errorlevel 1 (
+    echo PostgreSQL container mad-devs-postgres is not available.
+    echo Run .venv\Scripts\python.exe install.py and choose the Docker PostgreSQL install.
+    exit /b 1
+)
+set /a TRIES=0
+
+:wait_db
+docker exec mad-devs-postgres pg_isready >nul 2>&1
+if not errorlevel 1 exit /b 0
+set /a TRIES+=1
+if %TRIES% GEQ 30 (
+    echo PostgreSQL is not accepting connections yet.
+    exit /b 1
+)
+timeout /t 1 /nobreak >nul
+goto wait_db

@@ -6,5 +6,6 @@ alwaysApply: true
 Simple rules to keep project clean.
 
 1. Don't edit task.md, diary.md and decisions.md. You can read them, but can't edit.
+2. Don't edit files that starts with `[AI no edit]`. You can read them, but can't edit.
 
 

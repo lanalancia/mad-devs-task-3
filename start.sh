@@ -26,13 +26,50 @@ if [ ! -x .venv/bin/python ]; then
     exit 1
 fi
 
-# shellcheck disable=SC1091
-. .venv/bin/activate
+if ! .venv/bin/python -c "import psycopg" >/dev/null 2>&1; then
+    echo "Installing Python packages..."
+    .venv/bin/python -m pip install -r requirements.txt
+fi
 
-echo ""
-echo "Virtual environment is active."
-echo "Python: $(command -v python)"
-echo "Run: python install.py"
-echo ""
-
-exec "${SHELL:-/bin/sh}"
+while true; do
+    echo ""
+    echo "Services:"
+    echo "  1. backend+db+smtp"
+    echo "  2. frontend"
+    echo "  3. mock-website"
+    echo ""
+    printf "Start service: "
+    read -r choice || exit 0
+    case "$choice" in
+        1)
+            if ! docker start mad-devs-postgres >/dev/null 2>&1; then
+                echo "PostgreSQL container mad-devs-postgres is not available."
+                echo "Run .venv/bin/python install.py and choose the Docker PostgreSQL install."
+                continue
+            fi
+            ready=0
+            i=0
+            while [ "$i" -lt 30 ]; do
+                if docker exec mad-devs-postgres pg_isready >/dev/null 2>&1; then
+                    ready=1
+                    break
+                fi
+                i=$((i + 1))
+                sleep 1
+            done
+            if [ "$ready" -ne 1 ]; then
+                echo "PostgreSQL is not accepting connections yet."
+                continue
+            fi
+            echo "Starting backend. SMTP is not started in this step."
+            .venv/bin/python -m backend || true
+            echo "Backend stopped."
+            ;;
+        2|3)
+            echo "This service is not available in this step."
+            ;;
+        *)
+            echo "Unknown service. Enter 1, 2, or 3. The valid service in this step is 1."
+            ;;
+    esac
+done
