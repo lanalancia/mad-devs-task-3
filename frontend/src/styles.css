@@ -1,0 +1,54 @@
+body {
+  margin: 16px;
+  font-family: sans-serif;
+}
+
+.top {
+  text-align: right;
+}
+
+table {
+  border-collapse: collapse;
+  margin-top: 12px;
+}
+
+th,
+td {
+  border: 1px solid #ccc;
+  padding: 4px 8px;
+  text-align: left;
+}
+
+.pager {
+  margin-top: 12px;
+}
+
+input[type='text'],
+input[type='password'] {
+  width: 16em;
+}
+
+.popup-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.popup {
+  background: #fff;
+  border: 1px solid #ccc;
+  padding: 16px;
+  min-width: 240px;
+}
+
+.popup label {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.popup-actions {
+  margin-top: 12px;
+}

@@ -2,12 +2,6 @@
 setlocal EnableExtensions
 cd /d "%~dp0"
 
-call :ensure_venv
-if errorlevel 1 exit /b 1
-
-call :ensure_deps
-if errorlevel 1 exit /b 1
-
 :menu
 echo.
 echo Services:
@@ -17,9 +11,9 @@ echo   3. mock-website
 echo.
 set /p CHOICE=Start service: 
 if "%CHOICE%"=="1" goto start_backend
-if "%CHOICE%"=="2" goto unavailable
+if "%CHOICE%"=="2" goto start_frontend
 if "%CHOICE%"=="3" goto unavailable
-echo Unknown service. Enter 1, 2, or 3. The valid service in this step is 1.
+echo Unknown service. Enter 1, 2, or 3.
 goto menu
 
 :unavailable
@@ -27,11 +21,44 @@ echo This service is not available in this step.
 goto menu
 
 :start_backend
+call :ensure_venv
+if errorlevel 1 goto menu
+call :ensure_deps
+if errorlevel 1 goto menu
 call :ensure_db
 if errorlevel 1 goto menu
-echo Starting backend. SMTP is not started in this step.
+echo Starting backend. The HTTP API uses the port in config.ini. SMTP is not started in this step.
 .venv\Scripts\python.exe -m backend
 echo Backend stopped.
+goto menu
+
+:start_frontend
+where node >nul 2>&1
+if errorlevel 1 (
+    echo Node.js is required to start the frontend.
+    goto menu
+)
+where npm >nul 2>&1
+if errorlevel 1 (
+    echo npm is required to start the frontend.
+    goto menu
+)
+if not exist "frontend\node_modules\" (
+    echo Installing frontend packages...
+    pushd frontend
+    call npm install
+    if errorlevel 1 (
+        echo Failed to install frontend packages.
+        popd
+        goto menu
+    )
+    popd
+)
+echo Starting frontend at http://localhost:17777
+pushd frontend
+call npm run dev
+echo Frontend stopped.
+popd
 goto menu
 
 :ensure_venv

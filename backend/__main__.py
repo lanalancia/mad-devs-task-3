@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import threading
 from datetime import datetime, timedelta, timezone
 
+from backend.config import load_http_config
 from backend.db import DatabaseError, connect, ensure_schema, insert_history, load_active_entries
 from backend.polling import format_console, is_due, run_cycle
+from backend.server import ApiServer
 
 TICK_SECONDS = 1.0
 
@@ -26,12 +29,31 @@ def main() -> None:
         print("Exiting.")
         connection.close()
         sys.exit(1)
+    try:
+        port, jwt_secret = _http_settings()
+    except ValueError as exc:
+        print(exc)
+        print("Exiting.")
+        connection.close()
+        sys.exit(1)
+    try:
+        server = ApiServer(port, jwt_secret)
+    except OSError as exc:
+        print(f"Cannot listen on port {port}: {exc}")
+        print("Exiting.")
+        connection.close()
+        sys.exit(1)
+    print(f"HTTP API listening on port {port}.")
     print("Polling started.")
+    thread = threading.Thread(target=server.serve_forever, name="http", daemon=True)
+    thread.start()
     try:
         asyncio.run(supervise(connection))
     except KeyboardInterrupt:
         print("Stopped.")
     finally:
+        server.shutdown()
+        server.server_close()
         connection.close()
 
 
@@ -97,6 +119,18 @@ def _usable(entry: dict, invalid: set[int]) -> bool:
             f"Skipping {entry['url']}: timeout and polling rate must be integers of at least 1 second."
         )
     return False
+
+
+def _http_settings() -> tuple[int, str]:
+    raw = load_http_config()
+    try:
+        port = int(raw["port"])
+    except ValueError as exc:
+        raise ValueError(f"HTTP port in config.ini is not a number: {raw['port']}") from exc
+    if port < 1 or port > 65535:
+        raise ValueError(f"HTTP port in config.ini is out of range: {raw['port']}")
+    secret = raw["jwt_secret"].strip() or "dev-secret"
+    return port, secret
 
 
 def _sleep_seconds(entries: list[dict], inflight: set[int], now: datetime) -> float:

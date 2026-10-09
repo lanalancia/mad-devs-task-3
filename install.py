@@ -93,13 +93,16 @@ def load_config() -> dict[str, str]:
 
 def save_config(values: dict[str, str]) -> None:
     parser = configparser.ConfigParser(interpolation=None)
+    if CONFIG_PATH.exists():
+        parser.read(CONFIG_PATH, encoding="utf-8")
     parser["postgresql"] = {key: values[key] for key in DEFAULTS}
     buffer = io.StringIO()
     parser.write(buffer)
     header = (
         "# Application connection to PostgreSQL.\n"
         "# install.py writes either the local Docker container "
-        "or an existing database here.\n\n"
+        "or an existing database here.\n"
+        "# The http section is the API port and JWT secret.\n\n"
     )
     CONFIG_PATH.write_text(header + buffer.getvalue(), encoding="utf-8")
     shown = (

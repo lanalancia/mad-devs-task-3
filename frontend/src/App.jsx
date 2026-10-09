@@ -1,0 +1,603 @@
+import { useEffect, useRef, useState } from 'react'
+import { api } from './api.js'
+
+const PAGE_SIZES = [10, 25, 50, 100]
+const REFRESH_MS = 5000
+const BLANK_START = { url: '', interval: '30', timeout: '5' }
+
+function formatUtc(iso) {
+  if (!iso) {
+    return ''
+  }
+  const date = new Date(iso)
+  const pad = (value) => String(value).padStart(2, '0')
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())} UTC`
+}
+
+function nextPollTitle(iso) {
+  if (!iso) {
+    return 'Next poll: not polled yet'
+  }
+  return `Next poll: ${formatUtc(iso)}`
+}
+
+function pollLabel(status) {
+  return status === 'ACTIVE' ? 'polling' : 'paused'
+}
+
+function parseSeconds(text) {
+  if (!/^[1-9]\d*$/.test(String(text).trim())) {
+    return null
+  }
+  return Number(String(text).trim())
+}
+
+export default function App() {
+  const [pageSize, setPageSize] = useState(10)
+  const [page, setPage] = useState(1)
+  const [total, setTotal] = useState(0)
+  const [entries, setEntries] = useState([])
+  const [token, setToken] = useState('')
+  const [username, setUsername] = useState('')
+  const [editing, setEditing] = useState(null)
+  const [draft, setDraft] = useState('')
+  const [blank, setBlank] = useState(BLANK_START)
+  const [popup, setPopup] = useState(null)
+  const [loginUser, setLoginUser] = useState('')
+  const [loginPassword, setLoginPassword] = useState('')
+
+  const skipCommit = useRef(false)
+  const skipBlank = useRef(false)
+  const blankOrigin = useRef('')
+  const creating = useRef(false)
+  const generation = useRef(0)
+  const blankRef = useRef(blank)
+  const entriesRef = useRef(entries)
+  const draftRef = useRef(draft)
+  const session = useRef({ token: '', page: 1, pageSize: 10 })
+  blankRef.current = blank
+  entriesRef.current = entries
+  draftRef.current = draft
+  session.current = { token, page, pageSize }
+
+  const pageCount = Math.max(1, Math.ceil(total / pageSize))
+  const signedIn = Boolean(token)
+
+  function applyPage(data) {
+    setEntries(data.entries)
+    setTotal(data.total)
+    setPage(data.page)
+    setPageSize(data.page_size)
+  }
+
+  function showRequestError(error) {
+    if (error?.code === 'token_expired') {
+      setToken('')
+      setUsername('')
+      setEditing(null)
+      setPopup({ kind: 'expired' })
+      return
+    }
+    setPopup((current) => {
+      if (current?.kind === 'signin' || current?.kind === 'expired') {
+        return current
+      }
+      if (current?.kind === 'error' && current.message === error.message) {
+        return current
+      }
+      return { kind: 'error', message: error.message || 'Request failed.' }
+    })
+  }
+
+  useEffect(() => {
+    let active = true
+
+    async function load() {
+      const seen = generation.current
+      try {
+        const data = await api(`/api/entries?page=${page}&page_size=${pageSize}`)
+        if (!active || seen !== generation.current) {
+          return
+        }
+        applyPage(data)
+      } catch (error) {
+        if (!active || seen !== generation.current) {
+          return
+        }
+        showRequestError(error)
+      }
+    }
+
+    load()
+    const timer = setInterval(load, REFRESH_MS)
+    return () => {
+      active = false
+      clearInterval(timer)
+    }
+  }, [page, pageSize])
+
+  async function sendUpdate(entry, interval, timeout, status) {
+    generation.current += 1
+    try {
+      const data = await api('/api/entries', {
+        method: 'PATCH',
+        token: session.current.token,
+        body: {
+          url: entry.url,
+          interval_seconds: interval,
+          timeout_seconds: timeout,
+          status,
+          page: session.current.page,
+          page_size: session.current.pageSize,
+        },
+      })
+      generation.current += 1
+      applyPage(data)
+    } catch (error) {
+      generation.current += 1
+      showRequestError(error)
+    }
+  }
+
+  function fieldLabel(field) {
+    return field === 'interval_seconds' ? 'Polling rate' : 'Timeout'
+  }
+
+  async function commitField(entry, field) {
+    if (skipCommit.current) {
+      skipCommit.current = false
+      setEditing(null)
+      return
+    }
+    const parsed = parseSeconds(draftRef.current)
+    setEditing(null)
+    if (parsed == null) {
+      setPopup({ kind: 'error', message: `${fieldLabel(field)} must be an integer of at least 1.` })
+      return
+    }
+    if (parsed === entry[field]) {
+      return
+    }
+    const interval = field === 'interval_seconds' ? parsed : entry.interval_seconds
+    const timeout = field === 'timeout_seconds' ? parsed : entry.timeout_seconds
+    await sendUpdate(entry, interval, timeout, entry.status)
+  }
+
+  function beginEdit(entry, field) {
+    setEditing({ id: entry.id, field })
+    setDraft(String(entry[field]))
+  }
+
+  function onEditKeyDown(event) {
+    if (event.key !== 'Escape') {
+      return
+    }
+    skipCommit.current = true
+    setEditing(null)
+    event.currentTarget.blur()
+  }
+
+  function focusedCommit() {
+    const active = document.activeElement
+    if (!(active instanceof HTMLElement) || !active.dataset.commit) {
+      return null
+    }
+    return {
+      commit: active.dataset.commit,
+      field: active.dataset.field || '',
+      entryId: Number(active.dataset.entryId || 0),
+    }
+  }
+
+  function releaseFocus() {
+    const active = document.activeElement
+    if (!(active instanceof HTMLElement) || !active.dataset.commit) {
+      setEditing(null)
+      return
+    }
+    if (active.dataset.commit === 'entry') {
+      skipCommit.current = true
+    } else {
+      skipBlank.current = true
+    }
+    setEditing(null)
+    active.blur()
+  }
+
+  async function saveOtherEntry(focus, draftText) {
+    const entry = entriesRef.current.find((item) => item.id === focus.entryId)
+    if (!entry) {
+      return true
+    }
+    const parsed = parseSeconds(draftText)
+    if (parsed == null) {
+      setPopup({ kind: 'error', message: `${fieldLabel(focus.field)} must be an integer of at least 1.` })
+      return false
+    }
+    if (parsed === entry[focus.field]) {
+      return true
+    }
+    const interval = focus.field === 'interval_seconds' ? parsed : entry.interval_seconds
+    const timeout = focus.field === 'timeout_seconds' ? parsed : entry.timeout_seconds
+    await sendUpdate(entry, interval, timeout, entry.status)
+    return true
+  }
+
+  async function toggle(entry) {
+    const focus = focusedCommit()
+    const draftText = draftRef.current
+    releaseFocus()
+    if (focus?.commit === 'blank' && focus.field === 'url') {
+      await createEntry()
+    }
+    if (focus?.commit === 'entry' && focus.entryId !== entry.id) {
+      const saved = await saveOtherEntry(focus, draftText)
+      if (!saved) {
+        return
+      }
+    }
+    let interval = entry.interval_seconds
+    let timeout = entry.timeout_seconds
+    if (focus?.commit === 'entry' && focus.entryId === entry.id) {
+      const parsed = parseSeconds(draftText)
+      if (parsed == null) {
+        setPopup({ kind: 'error', message: `${fieldLabel(focus.field)} must be an integer of at least 1.` })
+        return
+      }
+      if (focus.field === 'interval_seconds') {
+        interval = parsed
+      } else {
+        timeout = parsed
+      }
+    }
+    const status = entry.status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE'
+    await sendUpdate(entry, interval, timeout, status)
+  }
+
+  async function remove(entry) {
+    const focus = focusedCommit()
+    const draftText = draftRef.current
+    releaseFocus()
+    if (focus?.commit === 'blank' && focus.field === 'url') {
+      await createEntry()
+    }
+    if (focus?.commit === 'entry' && focus.entryId !== entry.id) {
+      const saved = await saveOtherEntry(focus, draftText)
+      if (!saved) {
+        return
+      }
+    }
+    generation.current += 1
+    try {
+      const data = await api('/api/entries/delete', {
+        method: 'POST',
+        token: session.current.token,
+        body: {
+          url: entry.url,
+          page: session.current.page,
+          page_size: session.current.pageSize,
+        },
+      })
+      generation.current += 1
+      applyPage(data)
+    } catch (error) {
+      generation.current += 1
+      showRequestError(error)
+    }
+  }
+
+  async function createEntry() {
+    if (creating.current) {
+      return
+    }
+    const current = blankRef.current
+    const url = current.url.trim()
+    if (!url) {
+      return
+    }
+    const interval = parseSeconds(current.interval)
+    const timeout = parseSeconds(current.timeout)
+    if (interval == null || timeout == null) {
+      setPopup({ kind: 'error', message: 'Polling rate and timeout must be integers of at least 1.' })
+      return
+    }
+    creating.current = true
+    generation.current += 1
+    try {
+      const data = await api('/api/entries', {
+        method: 'POST',
+        token: session.current.token,
+        body: {
+          url,
+          interval_seconds: interval,
+          timeout_seconds: timeout,
+          page: session.current.page,
+          page_size: session.current.pageSize,
+        },
+      })
+      generation.current += 1
+      setBlank(BLANK_START)
+      applyPage(data)
+    } catch (error) {
+      generation.current += 1
+      showRequestError(error)
+    } finally {
+      creating.current = false
+    }
+  }
+
+  function blurBlankUrl() {
+    if (skipBlank.current) {
+      skipBlank.current = false
+      return
+    }
+    createEntry()
+  }
+
+  function blurBlankNumber(field) {
+    if (skipBlank.current) {
+      skipBlank.current = false
+      return
+    }
+    if (parseSeconds(blankRef.current[field]) != null) {
+      return
+    }
+    setBlank((current) => ({ ...current, [field]: blankOrigin.current }))
+    const label = field === 'interval' ? 'Polling rate' : 'Timeout'
+    setPopup({ kind: 'error', message: `${label} must be an integer of at least 1.` })
+  }
+
+  function keyBlank(event, field) {
+    if (event.key !== 'Escape') {
+      return
+    }
+    skipBlank.current = true
+    setBlank((current) => ({ ...current, [field]: blankOrigin.current }))
+    event.currentTarget.blur()
+  }
+
+  function focusBlank(field) {
+    blankOrigin.current = blankRef.current[field]
+  }
+
+  async function submitLogin(event) {
+    event.preventDefault()
+    try {
+      const result = await api('/api/login', {
+        method: 'POST',
+        body: { username: loginUser, password: loginPassword },
+      })
+      setToken(result.token)
+      setUsername(result.username)
+      setLoginPassword('')
+      setPopup(null)
+    } catch (error) {
+      setLoginPassword('')
+      setToken('')
+      setUsername('')
+      setPopup({ kind: 'error', message: error.message })
+    }
+  }
+
+  function logout() {
+    setToken('')
+    setUsername('')
+    setEditing(null)
+    setPopup(null)
+  }
+
+  function changePageSize(event) {
+    setPageSize(Number(event.target.value))
+    setPage(1)
+  }
+
+  function secondsInput(entry, field) {
+    const focused = editing && editing.id === entry.id && editing.field === field
+    return (
+      <input
+        type="text"
+        inputMode="numeric"
+        data-commit="entry"
+        data-field={field}
+        data-entry-id={entry.id}
+        value={focused ? draft : String(entry[field])}
+        onFocus={() => beginEdit(entry, field)}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={() => commitField(entry, field)}
+        onKeyDown={onEditKeyDown}
+      />
+    )
+  }
+
+  return (
+    <>
+      <header className="top">
+        {signedIn ? (
+          <>
+            <span>Signed in as {username}</span>{' '}
+            <button type="button" onClick={logout}>
+              Logout
+            </button>
+          </>
+        ) : (
+          <button type="button" onClick={() => setPopup({ kind: 'signin' })}>
+            Sign In
+          </button>
+        )}
+      </header>
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>URL</th>
+            <th>Polling rate (seconds)</th>
+            <th>Timeout (seconds)</th>
+            <th>Play / pause</th>
+            <th>Status</th>
+            <th>Error</th>
+            <th>Last poll (UTC)</th>
+            {signedIn ? <th>Delete</th> : null}
+          </tr>
+        </thead>
+        <tbody>
+          {entries.map((entry) => (
+            <tr key={entry.id}>
+              <td>{entry.id}</td>
+              <td>{entry.url}</td>
+              <td>{signedIn ? secondsInput(entry, 'interval_seconds') : entry.interval_seconds}</td>
+              <td>{signedIn ? secondsInput(entry, 'timeout_seconds') : entry.timeout_seconds}</td>
+              <td>
+                {signedIn ? (
+                  <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => toggle(entry)}>
+                    {entry.status === 'ACTIVE' ? 'Pause' : 'Play'}
+                  </button>
+                ) : (
+                  pollLabel(entry.status)
+                )}
+              </td>
+              <td>{entry.health}</td>
+              <td>{entry.error}</td>
+              <td title={nextPollTitle(entry.next_poll_at)}>{formatUtc(entry.last_polled_at)}</td>
+              {signedIn ? (
+                <td>
+                  <button
+                    type="button"
+                    title="Delete entry"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => remove(entry)}
+                  >
+                    [X]
+                  </button>
+                </td>
+              ) : null}
+            </tr>
+          ))}
+          {signedIn ? (
+            <tr>
+              <td />
+              <td>
+                <input
+                  type="text"
+                  value={blank.url}
+                  aria-label="New URL"
+                  data-commit="blank"
+                  data-field="url"
+                  onFocus={() => focusBlank('url')}
+                  onChange={(event) => setBlank((current) => ({ ...current, url: event.target.value }))}
+                  onBlur={blurBlankUrl}
+                  onKeyDown={(event) => keyBlank(event, 'url')}
+                />
+              </td>
+              <td>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={blank.interval}
+                  aria-label="New polling rate"
+                  data-commit="blank"
+                  data-field="interval"
+                  onFocus={() => focusBlank('interval')}
+                  onChange={(event) => setBlank((current) => ({ ...current, interval: event.target.value }))}
+                  onBlur={() => blurBlankNumber('interval')}
+                  onKeyDown={(event) => keyBlank(event, 'interval')}
+                />
+              </td>
+              <td>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={blank.timeout}
+                  aria-label="New timeout"
+                  data-commit="blank"
+                  data-field="timeout"
+                  onFocus={() => focusBlank('timeout')}
+                  onChange={(event) => setBlank((current) => ({ ...current, timeout: event.target.value }))}
+                  onBlur={() => blurBlankNumber('timeout')}
+                  onKeyDown={(event) => keyBlank(event, 'timeout')}
+                />
+              </td>
+              <td>paused</td>
+              <td />
+              <td />
+              <td />
+              <td />
+            </tr>
+          ) : null}
+        </tbody>
+      </table>
+      <div className="pager">
+        <label>
+          Page size{' '}
+          <select value={pageSize} onChange={changePageSize}>
+            {PAGE_SIZES.map((size) => (
+              <option key={size} value={size}>
+                {size}
+              </option>
+            ))}
+          </select>
+        </label>{' '}
+        <button type="button" onClick={() => setPage((current) => current - 1)} disabled={page <= 1}>
+          Previous
+        </button>{' '}
+        <span>
+          Page {Math.min(page, pageCount)} of {pageCount}
+        </span>{' '}
+        <button type="button" onClick={() => setPage((current) => current + 1)} disabled={page >= pageCount}>
+          Next
+        </button>
+      </div>
+      {popup ? (
+        <div className="popup-backdrop">
+          <div className="popup" role="dialog">
+            {popup.kind === 'expired' ? (
+              <>
+                <p>Please sign in again</p>
+                <button type="button" onClick={() => setPopup({ kind: 'signin' })}>
+                  Sign in
+                </button>{' '}
+                <button type="button" onClick={() => setPopup(null)}>
+                  Close
+                </button>
+              </>
+            ) : null}
+            {popup.kind === 'error' ? (
+              <>
+                <p>{popup.message}</p>
+                <button type="button" onClick={() => setPopup(null)}>
+                  OK
+                </button>
+              </>
+            ) : null}
+            {popup.kind === 'signin' ? (
+              <form onSubmit={submitLogin}>
+                <label>
+                  Username{' '}
+                  <input
+                    value={loginUser}
+                    autoComplete="username"
+                    onChange={(event) => setLoginUser(event.target.value)}
+                  />
+                </label>
+                <label>
+                  Password{' '}
+                  <input
+                    type="password"
+                    value={loginPassword}
+                    autoComplete="current-password"
+                    onChange={(event) => setLoginPassword(event.target.value)}
+                  />
+                </label>
+                <div className="popup-actions">
+                  <button type="submit">Sign in</button>{' '}
+                  <button type="button" onClick={() => setPopup(null)}>
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+    </>
+  )
+}

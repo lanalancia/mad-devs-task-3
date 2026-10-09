@@ -40,3 +40,19 @@ First iteration of agentoutput. Testing and planning next steps
 18:00
 tested the step 1. We now have a working backend. Committing and planning the next step. 
 I want to have a react website. AI says react is a better choice, as there more devs familiar with React then Vue.
+
+18:30 
+React frontend works great. Step 2 completed
+Planning the step 3: Frontend-backend communication, and also edditing 
+
+18:30-20:00 break
+
+21:00 
+Finished writing task 3 and getting Agent's approval. making the step 3
+
+21:25
+Looks like agent is struggling with tests. later i will give it some playwright
+
+21:32
+Step 3 completed. Frontend and backend are communicate. Auth works. Creating entries works. Everything else will check tomorrow.
+I rest for today. 

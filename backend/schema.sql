@@ -4,7 +4,7 @@ CREATE TABLE poll_entries (
     timeout_seconds integer NOT NULL,
     interval_seconds integer NOT NULL,
     expected_code integer NOT NULL,
-    status text NOT NULL CHECK (status IN ('ACTIVE', 'PAUSED'))
+    status text NOT NULL CHECK (status IN ('ACTIVE', 'PAUSED', 'DELETED'))
 );
 
 CREATE TABLE poll_history (

@@ -25,9 +25,15 @@ POLL_HISTORY_COLUMNS = {
     "duration_ms",
     "message",
 }
+USER_COLUMNS = {
+    "id",
+    "username",
+    "password",
+}
 REQUIRED_TABLES = {
     "poll_entries": POLL_ENTRY_COLUMNS,
     "poll_history": POLL_HISTORY_COLUMNS,
+    "users": USER_COLUMNS,
 }
 
 
@@ -57,10 +63,7 @@ def connect() -> psycopg.Connection:
 
 
 def ensure_schema(connection: psycopg.Connection) -> None:
-    """Exit path for a missing or unexpected poll schema.
-
-    The users table is created by install.py and is not read here.
-    """
+    """Exit path for a missing or unexpected application schema."""
     problems: list[str] = []
     for table_name, required in REQUIRED_TABLES.items():
         present = _columns(connection, table_name)
@@ -76,6 +79,32 @@ def ensure_schema(connection: psycopg.Connection) -> None:
         raise DatabaseError(
             f"{detail} Run python install.py and choose the Docker PostgreSQL install."
         )
+    _ensure_deleted_status(connection)
+
+
+def _ensure_deleted_status(connection: psycopg.Connection) -> None:
+    """Allow the soft-delete status on databases created before it existed."""
+    row = connection.execute(
+        """
+        SELECT pg_get_constraintdef(oid) AS definition
+        FROM pg_constraint
+        WHERE conrelid = 'public.poll_entries'::regclass
+          AND conname = 'poll_entries_status_check'
+        """
+    ).fetchone()
+    if row is not None and "DELETED" in row["definition"]:
+        return
+    if row is not None:
+        connection.execute(
+            "ALTER TABLE poll_entries DROP CONSTRAINT poll_entries_status_check"
+        )
+    connection.execute(
+        """
+        ALTER TABLE poll_entries
+        ADD CONSTRAINT poll_entries_status_check
+        CHECK (status IN ('ACTIVE', 'PAUSED', 'DELETED'))
+        """
+    )
 
 
 def load_active_entries(connection: psycopg.Connection) -> list[dict]:
