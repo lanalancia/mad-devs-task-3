@@ -7,6 +7,7 @@ from backend.db import DatabaseError, connect, ensure_schema
 from backend.entries import delete_entry, load_page, load_poll_target, save_new_entry, update_entry
 from backend.poll_control import PollControl, run_poll
 from backend.polling import HistoryRow
+from backend.stats import load_statistics
 
 URL = "http://example.test/step3-entry"
 
@@ -126,6 +127,46 @@ class EntryDatabaseTests(unittest.TestCase):
         self.assertEqual(control.running_ids(), set())
         delete_entry(self.connection, url, 1, 100)
         self.assertIsNone(load_poll_target(self.connection, created["id"]))
+
+    def test_statistics_reads_the_requested_span_and_one_check_past_each_edge(self):
+        url = "http://example.test/step-stats-range"
+        _action, page = save_new_entry(self.connection, url, 30, 5, 1, 100)
+        created = next(entry for entry in page["entries"] if entry["url"] == url)
+        entry_id = created["id"]
+        rows = [
+            (datetime(2026, 8, 1, 0, 0, tzinfo=timezone.utc), 500, "500"),
+            (datetime(2026, 8, 1, 0, 0, 30, tzinfo=timezone.utc), 500, "500"),
+            (datetime(2026, 9, 30, 23, 59, 30, tzinfo=timezone.utc), 500, "500"),
+            (datetime(2026, 10, 1, 0, 0, tzinfo=timezone.utc), 500, "500"),
+            (datetime(2026, 10, 1, 0, 0, 30, tzinfo=timezone.utc), 200, "OK"),
+            (datetime(2026, 10, 12, 0, 0, tzinfo=timezone.utc), 200, "OK"),
+            (datetime(2026, 10, 13, 0, 0, tzinfo=timezone.utc), 200, "OK"),
+        ]
+        for polled_at, status, message in rows:
+            self.connection.execute(
+                """
+                INSERT INTO poll_history (poll_entry_id, polled_at, http_status, duration_ms, message)
+                VALUES (%s, %s, %s, 10, %s)
+                """,
+                (entry_id, polled_at, status, message),
+            )
+        report = load_statistics(
+            self.connection,
+            entry_id,
+            "day",
+            datetime(2026, 10, 1, tzinfo=timezone.utc).date(),
+            datetime(2026, 10, 10, tzinfo=timezone.utc).date(),
+            1,
+            10,
+            datetime(2026, 10, 10, 12, 0, tzinfo=timezone.utc),
+        )
+        self.assertIsNotNone(report)
+        incidents = [row for row in report["rows"] if row["kind"] == "incident"]
+        self.assertEqual(
+            [(row["start"], row["end"]) for row in incidents],
+            [("2026-09-30T23:59:30Z", "2026-10-01T00:00:30Z")],
+        )
+        self.assertEqual(report["last_polled_at"], "2026-10-13T00:00:00Z")
 
     def event_kinds(self, entry_id: int) -> list[str]:
         rows = self.connection.execute(

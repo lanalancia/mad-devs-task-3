@@ -93,3 +93,8 @@ Working on next big piece. Decide to not work on "expected error message", and l
 
 18:05
 planned out bug fixes and "poll now" feature. Executing
+
+18:53
+Decide to not do SMTP and email. Instead there will be a history of fake "email sent" events in group page. 
+It's just because it's time to send it already and i don't want to ask to move the deadline. 
+So for now I only need fake testable websites, scheduled maintenace and fill the docs

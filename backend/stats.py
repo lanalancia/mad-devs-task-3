@@ -39,6 +39,19 @@ def parse_day(value: object) -> date | None:
         raise EntryError("Date must be YYYY-MM-DD.") from exc
 
 
+def statistics_fetch_range(
+    window: str,
+    day_from: date | None,
+    day_to: date | None,
+    now: datetime,
+) -> tuple[datetime, datetime]:
+    """Start inclusive and end exclusive for the graph window and the journal."""
+    now = _aware(now)
+    _resolved_from, _resolved_to, range_start, range_end = _resolved_dates(day_from, day_to, now)
+    window_start = now - timedelta(hours=WINDOWS[window])
+    return min(window_start, range_start), max(now, range_end)
+
+
 def load_statistics(
     connection: psycopg.Connection,
     entry_id: int,
@@ -59,38 +72,126 @@ def load_statistics(
     ).fetchone()
     if entry is None:
         return None
-    checks = connection.execute(
-        """
-        SELECT id, polled_at, http_status, duration_ms, message
-        FROM poll_history
-        WHERE poll_entry_id = %s
-        ORDER BY polled_at, id
-        """,
-        (entry_id,),
-    ).fetchall()
-    events = connection.execute(
-        """
-        SELECT id, kind, happened_at
-        FROM poll_entry_events
-        WHERE poll_entry_id = %s
-        ORDER BY happened_at, id
-        """,
-        (entry_id,),
-    ).fetchall()
+    moment = now or datetime.now(timezone.utc)
+    fetch_start, fetch_end = statistics_fetch_range(window, day_from, day_to, moment)
+    checks = _load_checks(connection, entry_id, fetch_start, fetch_end)
+    events = _load_events(connection, entry_id, checks, fetch_start, fetch_end)
     report = build_statistics(
-        checks=[dict(row) for row in checks],
-        events=[dict(row) for row in events],
+        checks=checks,
+        events=events,
         interval_seconds=entry["interval_seconds"],
         window=window,
         day_from=day_from,
         day_to=day_to,
         page=page,
         page_size=page_size,
-        now=now or datetime.now(timezone.utc),
+        now=moment,
     )
     report["id"] = entry["id"]
     report["url"] = entry["url"]
+    report["last_polled_at"] = _latest_poll(connection, entry_id)
     return report
+
+
+def _load_checks(
+    connection: psycopg.Connection,
+    entry_id: int,
+    fetch_start: datetime,
+    fetch_end: datetime,
+) -> list[dict]:
+    """Checks inside the span, plus the nearest one on each side."""
+    previous = connection.execute(
+        """
+        SELECT id, polled_at, http_status, duration_ms, message
+        FROM poll_history
+        WHERE poll_entry_id = %s AND polled_at < %s
+        ORDER BY polled_at DESC, id DESC
+        LIMIT 1
+        """,
+        (entry_id, fetch_start),
+    ).fetchone()
+    inside = connection.execute(
+        """
+        SELECT id, polled_at, http_status, duration_ms, message
+        FROM poll_history
+        WHERE poll_entry_id = %s AND polled_at >= %s AND polled_at < %s
+        ORDER BY polled_at, id
+        """,
+        (entry_id, fetch_start, fetch_end),
+    ).fetchall()
+    following = connection.execute(
+        """
+        SELECT id, polled_at, http_status, duration_ms, message
+        FROM poll_history
+        WHERE poll_entry_id = %s AND polled_at >= %s
+        ORDER BY polled_at, id
+        LIMIT 1
+        """,
+        (entry_id, fetch_end),
+    ).fetchone()
+    rows: list[dict] = []
+    if previous is not None:
+        rows.append(dict(previous))
+    rows.extend(dict(row) for row in inside)
+    if following is not None:
+        rows.append(dict(following))
+    return rows
+
+
+def _load_events(
+    connection: psycopg.Connection,
+    entry_id: int,
+    checks: list[dict],
+    fetch_start: datetime,
+    fetch_end: datetime,
+) -> list[dict]:
+    """Events that can label a gap, including the state already in effect at the start."""
+    if checks:
+        event_from = min(_aware(row["polled_at"]) for row in checks)
+        event_to = max(_aware(row["polled_at"]) for row in checks)
+    else:
+        event_from = fetch_start
+        event_to = fetch_end
+    anchor = connection.execute(
+        """
+        SELECT id, kind, happened_at
+        FROM poll_entry_events
+        WHERE poll_entry_id = %s AND happened_at <= %s
+        ORDER BY happened_at DESC, id DESC
+        LIMIT 1
+        """,
+        (entry_id, event_from),
+    ).fetchone()
+    later = connection.execute(
+        """
+        SELECT id, kind, happened_at
+        FROM poll_entry_events
+        WHERE poll_entry_id = %s AND happened_at > %s AND happened_at <= %s
+        ORDER BY happened_at, id
+        """,
+        (entry_id, event_from, event_to),
+    ).fetchall()
+    rows: list[dict] = []
+    if anchor is not None:
+        rows.append(dict(anchor))
+    rows.extend(dict(row) for row in later)
+    return rows
+
+
+def _latest_poll(connection: psycopg.Connection, entry_id: int) -> str | None:
+    row = connection.execute(
+        """
+        SELECT polled_at
+        FROM poll_history
+        WHERE poll_entry_id = %s
+        ORDER BY polled_at DESC, id DESC
+        LIMIT 1
+        """,
+        (entry_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return _iso(_aware(row["polled_at"]))
 
 
 def build_statistics(
@@ -113,16 +214,8 @@ def build_statistics(
         ({**row, "happened_at": _aware(row["happened_at"])} for row in events),
         key=lambda row: (row["happened_at"], row.get("id", 0)),
     )
+    day_from, day_to, range_start, range_end = _resolved_dates(day_from, day_to, now)
     window_start = now - timedelta(hours=WINDOWS[window])
-    today = now.date()
-    if day_from is None:
-        day_from = today - timedelta(days=30)
-    if day_to is None:
-        day_to = today
-    if day_from > day_to:
-        raise EntryError("The start date must be on or before the end date.")
-    range_start = datetime.combine(day_from, time.min, tzinfo=timezone.utc)
-    range_end = datetime.combine(day_to + timedelta(days=1), time.min, tzinfo=timezone.utc)
 
     in_window = [row for row in ordered if window_start <= row["polled_at"] <= now]
     successful = sum(1 for row in in_window if row["message"] == "OK")
@@ -149,6 +242,23 @@ def build_statistics(
         "last_polled_at": _iso(ordered[-1]["polled_at"]) if ordered else None,
         "rows": [_serialize_row(row) for row in visible],
     }
+
+
+def _resolved_dates(
+    day_from: date | None,
+    day_to: date | None,
+    now: datetime,
+) -> tuple[date, date, datetime, datetime]:
+    today = now.date()
+    if day_from is None:
+        day_from = today - timedelta(days=30)
+    if day_to is None:
+        day_to = today
+    if day_from > day_to:
+        raise EntryError("The start date must be on or before the end date.")
+    range_start = datetime.combine(day_from, time.min, tzinfo=timezone.utc)
+    range_end = datetime.combine(day_to + timedelta(days=1), time.min, tzinfo=timezone.utc)
+    return day_from, day_to, range_start, range_end
 
 
 def _incidents(checks: list[dict], interval_seconds: int, now: datetime) -> list[dict]:

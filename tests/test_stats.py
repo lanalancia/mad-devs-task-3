@@ -1,8 +1,8 @@
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from backend.entries import EntryError
-from backend.stats import build_statistics
+from backend.stats import build_statistics, statistics_fetch_range
 
 BASE = datetime(2026, 10, 10, 12, 0, tzinfo=timezone.utc)
 NOW = BASE + timedelta(hours=1)
@@ -139,3 +139,17 @@ class GapTests(unittest.TestCase):
     def test_the_date_range_has_to_run_forward(self):
         with self.assertRaises(EntryError):
             report([check(0)], day_from=BASE.date(), day_to=BASE.date() - timedelta(days=1))
+
+
+class FetchRangeTests(unittest.TestCase):
+    def test_the_span_covers_the_graph_and_the_journal(self):
+        now = datetime(2026, 10, 10, 12, 0, tzinfo=timezone.utc)
+        start, end = statistics_fetch_range("day", date(2026, 10, 1), date(2026, 10, 10), now)
+        self.assertEqual(start, datetime(2026, 10, 1, tzinfo=timezone.utc))
+        self.assertEqual(end, datetime(2026, 10, 11, tzinfo=timezone.utc))
+
+    def test_a_month_graph_does_not_reach_before_its_window(self):
+        now = datetime(2026, 10, 10, 12, 0, tzinfo=timezone.utc)
+        start, end = statistics_fetch_range("month", date(2026, 10, 10), date(2026, 10, 10), now)
+        self.assertEqual(start, datetime(2026, 9, 10, 12, 0, tzinfo=timezone.utc))
+        self.assertEqual(end, datetime(2026, 10, 11, tzinfo=timezone.utc))
