@@ -4,7 +4,9 @@ body {
 }
 
 .top {
-  text-align: right;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
 table {
@@ -51,4 +53,30 @@ input[type='password'] {
 
 .popup-actions {
   margin-top: 12px;
+}
+
+.stats-url {
+  font-size: 1.1rem;
+  font-weight: normal;
+  word-break: break-all;
+}
+
+.stats-controls {
+  margin-top: 12px;
+}
+
+.stats-controls button {
+  margin-right: 8px;
+}
+
+.chart {
+  display: block;
+  margin-top: 8px;
+  width: 500px;
+  max-width: 100%;
+  height: auto;
+}
+
+tr.incident {
+  cursor: pointer;
 }

@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import psycopg
 
 from backend.auth import passwords_match
+from backend.urls import UrlError, normalize_url
 
 PAGE_SIZES = (10, 25, 50, 100)
 DEFAULT_EXPECTED_CODE = 200
@@ -64,10 +65,35 @@ def require_seconds(value: object, label: str) -> int:
 def require_url(value: object) -> str:
     if not isinstance(value, str):
         raise EntryError("URL must be a string.")
+    try:
+        return normalize_url(value)
+    except UrlError as exc:
+        raise EntryError(str(exc)) from exc
+
+
+def require_saved_url(value: object) -> str:
+    """The address already stored on a row. Deleting it does not re-check the format."""
+    if not isinstance(value, str):
+        raise EntryError("URL must be a string.")
     url = value.strip()
     if not url:
         raise EntryError("URL is required.")
     return url
+
+
+def require_entry_id(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise EntryError("Entry id must be an integer of at least 1.")
+    return value
+
+
+def status_event(previous: str, new: str) -> str | None:
+    """Pause and resume are logged. Editing numbers on the same status is not."""
+    if previous == "ACTIVE" and new == "PAUSED":
+        return "paused"
+    if previous == "PAUSED" and new == "ACTIVE":
+        return "resumed"
+    return None
 
 
 def require_poll_status(value: object) -> str:
@@ -163,11 +189,14 @@ def save_new_entry(
                         interval_seconds = %s,
                         status = 'PAUSED'
                     WHERE url = %s AND status = 'DELETED'
+                    RETURNING id
                     """,
                     (timeout_seconds, interval_seconds, url),
                 )
-                if updated.rowcount != 1:
+                restored = updated.fetchone()
+                if restored is None:
                     return "exists", None
+                _record_event(connection, restored["id"], "restored")
     except psycopg.errors.UniqueViolation:
         return "exists", None
     return action, load_page(connection, page, page_size)
@@ -181,19 +210,34 @@ def update_entry(
     status: str,
     page: int,
     page_size: int,
+    submitted: str | None = None,
 ) -> dict | None:
-    updated = connection.execute(
-        """
-        UPDATE poll_entries
-        SET interval_seconds = %s,
-            timeout_seconds = %s,
-            status = %s
-        WHERE url = %s AND status <> 'DELETED'
-        """,
-        (interval_seconds, timeout_seconds, status, url),
-    )
-    if updated.rowcount != 1:
-        return None
+    with connection.transaction():
+        current = connection.execute(
+            """
+            SELECT id, status
+            FROM poll_entries
+            WHERE url = %s AND status <> 'DELETED'
+            """,
+            (_stored_url(connection, url, submitted),),
+        ).fetchone()
+        if current is None:
+            return None
+        updated = connection.execute(
+            """
+            UPDATE poll_entries
+            SET interval_seconds = %s,
+                timeout_seconds = %s,
+                status = %s
+            WHERE id = %s AND status <> 'DELETED'
+            """,
+            (interval_seconds, timeout_seconds, status, current["id"]),
+        )
+        if updated.rowcount != 1:
+            return None
+        kind = status_event(current["status"], status)
+        if kind is not None:
+            _record_event(connection, current["id"], kind)
     return load_page(connection, page, page_size)
 
 
@@ -203,17 +247,55 @@ def delete_entry(
     page: int,
     page_size: int,
 ) -> dict | None:
-    updated = connection.execute(
-        """
-        UPDATE poll_entries
-        SET status = 'DELETED'
-        WHERE url = %s AND status <> 'DELETED'
-        """,
-        (url,),
-    )
-    if updated.rowcount != 1:
-        return None
+    with connection.transaction():
+        current = connection.execute(
+            """
+            SELECT id
+            FROM poll_entries
+            WHERE url = %s AND status <> 'DELETED'
+            """,
+            (url,),
+        ).fetchone()
+        if current is None:
+            return None
+        updated = connection.execute(
+            """
+            UPDATE poll_entries
+            SET status = 'DELETED'
+            WHERE id = %s AND status <> 'DELETED'
+            """,
+            (current["id"],),
+        )
+        if updated.rowcount != 1:
+            return None
+        _record_event(connection, current["id"], "deleted")
     return load_page(connection, page, page_size)
+
+
+def _stored_url(connection: psycopg.Connection, normalized: str, submitted: str | None) -> str:
+    """Keep a saved address that could not be rewritten to the normalized form."""
+    if not isinstance(submitted, str):
+        return normalized
+    raw = submitted.strip()
+    if not raw or raw == normalized:
+        return normalized
+    found = connection.execute(
+        "SELECT id FROM poll_entries WHERE url = %s",
+        (raw,),
+    ).fetchone()
+    if found is None:
+        return normalized
+    return raw
+
+
+def _record_event(connection: psycopg.Connection, poll_entry_id: int, kind: str) -> None:
+    connection.execute(
+        """
+        INSERT INTO poll_entry_events (poll_entry_id, kind, happened_at)
+        VALUES (%s, %s, %s)
+        """,
+        (poll_entry_id, kind, datetime.now(timezone.utc)),
+    )
 
 
 def _serialize(row: dict) -> dict:

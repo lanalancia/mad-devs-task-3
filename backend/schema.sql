@@ -19,6 +19,16 @@ CREATE TABLE poll_history (
 CREATE INDEX poll_history_entry_polled_at_idx
     ON poll_history (poll_entry_id, polled_at DESC);
 
+CREATE TABLE poll_entry_events (
+    id bigserial PRIMARY KEY,
+    poll_entry_id bigint NOT NULL REFERENCES poll_entries (id) ON DELETE CASCADE,
+    kind text NOT NULL CHECK (kind IN ('paused', 'resumed', 'deleted', 'restored')),
+    happened_at timestamptz NOT NULL
+);
+
+CREATE INDEX poll_entry_events_entry_happened_at_idx
+    ON poll_entry_events (poll_entry_id, happened_at);
+
 CREATE TABLE users (
     id bigserial PRIMARY KEY,
     username text NOT NULL UNIQUE,

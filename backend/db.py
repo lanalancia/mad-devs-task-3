@@ -8,6 +8,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from backend.config import load_config
+from backend.urls import UrlError, normalize_url
 
 POLL_ENTRY_COLUMNS = {
     "id",
@@ -80,6 +81,8 @@ def ensure_schema(connection: psycopg.Connection) -> None:
             f"{detail} Run python install.py and choose the Docker PostgreSQL install."
         )
     _ensure_deleted_status(connection)
+    _ensure_events_table(connection)
+    _normalize_stored_urls(connection)
 
 
 def _ensure_deleted_status(connection: psycopg.Connection) -> None:
@@ -105,6 +108,48 @@ def _ensure_deleted_status(connection: psycopg.Connection) -> None:
         CHECK (status IN ('ACTIVE', 'PAUSED', 'DELETED'))
         """
     )
+
+
+def _ensure_events_table(connection: psycopg.Connection) -> None:
+    """Add the pause and delete log on databases created before it existed."""
+    if _columns(connection, "poll_entry_events"):
+        return
+    connection.execute(
+        """
+        CREATE TABLE poll_entry_events (
+            id bigserial PRIMARY KEY,
+            poll_entry_id bigint NOT NULL REFERENCES poll_entries (id) ON DELETE CASCADE,
+            kind text NOT NULL CHECK (kind IN ('paused', 'resumed', 'deleted', 'restored')),
+            happened_at timestamptz NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX poll_entry_events_entry_happened_at_idx
+            ON poll_entry_events (poll_entry_id, happened_at)
+        """
+    )
+
+
+def _normalize_stored_urls(connection: psycopg.Connection) -> None:
+    """Rewrite saved addresses into the same form new entries use."""
+    rows = connection.execute("SELECT id, url FROM poll_entries").fetchall()
+    for row in rows:
+        try:
+            normalized = normalize_url(row["url"])
+        except UrlError:
+            continue
+        if normalized == row["url"]:
+            continue
+        try:
+            with connection.transaction():
+                connection.execute(
+                    "UPDATE poll_entries SET url = %s WHERE id = %s",
+                    (normalized, row["id"]),
+                )
+        except psycopg.errors.UniqueViolation:
+            print(f"Left {row['url']} unchanged: {normalized} already exists.")
 
 
 def load_active_entries(connection: psycopg.Connection) -> list[dict]:

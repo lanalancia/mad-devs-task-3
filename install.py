@@ -12,6 +12,8 @@ import subprocess
 import time
 from pathlib import Path
 
+from backend.urls import UrlError, normalize_url
+
 POSTGRES_IMAGE = "postgres:17"
 CONTAINER_NAME = "mad-devs-postgres"
 VOLUME_NAME = "mad-devs-postgres"
@@ -326,9 +328,14 @@ def parse_poll_entry(item: object) -> tuple[str, int, int, int, str] | None:
     if not isinstance(item, dict):
         print("Each poll entry in init-poll-entries.json must be an object.")
         return None
-    url = item.get("url")
-    if not isinstance(url, str) or not url.strip():
+    raw_url = item.get("url")
+    if not isinstance(raw_url, str) or not raw_url.strip():
         print("A poll entry is missing a url.")
+        return None
+    try:
+        url = normalize_url(raw_url)
+    except UrlError as exc:
+        print(f"{raw_url}: {exc}")
         return None
     status = item.get("polling_status")
     if status not in {"ACTIVE", "PAUSED"}:
@@ -398,7 +405,9 @@ def setup_application_database(user: str, database: str) -> bool:
         ):
             print("Existing tables left unchanged.")
             return True
-        dropping = "DROP TABLE IF EXISTS poll_history, poll_entries, users CASCADE;\n"
+        dropping = (
+            "DROP TABLE IF EXISTS poll_entry_events, poll_history, poll_entries, users CASCADE;\n"
+        )
     try:
         schema = SCHEMA_PATH.read_text(encoding="utf-8")
     except OSError as exc:

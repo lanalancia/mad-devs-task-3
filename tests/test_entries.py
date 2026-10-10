@@ -1,13 +1,18 @@
 import unittest
 
+import json
+from pathlib import Path
+
 from backend.entries import (
     EntryError,
     clamp_page,
     creation_action,
     health_fields,
     require_page_size,
+    require_saved_url,
     require_seconds,
     require_url,
+    status_event,
 )
 
 
@@ -52,3 +57,28 @@ class PageTests(unittest.TestCase):
         with self.assertRaises(EntryError):
             require_url("   ")
         self.assertEqual(require_url("  https://www.google.com  "), "https://www.google.com")
+        self.assertEqual(require_url("http://google.com/"), "http://google.com")
+        self.assertEqual(require_url("http://google.com/page/"), "http://google.com/page/")
+        self.assertEqual(require_url("HTTP://Google.com/Foo"), "http://google.com/Foo")
+        self.assertEqual(require_url("www.google.com"), "http://www.google.com")
+        self.assertEqual(require_url("localhost:8080/health"), "http://localhost:8080/health")
+        self.assertEqual(require_url("https://example.com:443/a"), "https://example.com:443/a")
+        with self.assertRaises(EntryError):
+            require_url("google.com")
+        self.assertEqual(require_saved_url("  anime.com  "), "anime.com")
+        self.assertEqual(require_saved_url("https://www.anime.com/"), "https://www.anime.com/")
+        with self.assertRaises(EntryError):
+            require_url("ftp://google.com")
+
+    def test_seed_urls_are_accepted(self):
+        payload = json.loads(Path("init-poll-entries.json").read_text(encoding="utf-8"))
+        normalized = [require_url(item["url"]) for item in payload]
+        self.assertEqual(normalized[0], "https://www.google.com")
+        self.assertFalse(normalized[1].endswith("/"))
+        self.assertEqual(normalized[2], "http://localhost:17777")
+
+    def test_status_changes_that_are_logged(self):
+        self.assertEqual(status_event("ACTIVE", "PAUSED"), "paused")
+        self.assertEqual(status_event("PAUSED", "ACTIVE"), "resumed")
+        self.assertIsNone(status_event("ACTIVE", "ACTIVE"))
+        self.assertIsNone(status_event("PAUSED", "PAUSED"))

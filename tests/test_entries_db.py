@@ -50,6 +50,7 @@ class EntryDatabaseTests(unittest.TestCase):
 
         updated = update_entry(self.connection, URL, 45, 7, "ACTIVE", 1, 100)
         self.assertIsNotNone(updated)
+        self.assertEqual(self.event_kinds(entry_id), ["resumed"])
         active = next(entry for entry in updated["entries"] if entry["url"] == URL)
         self.assertEqual(active["status"], "ACTIVE")
         self.assertEqual(active["health"], "UP")
@@ -58,6 +59,7 @@ class EntryDatabaseTests(unittest.TestCase):
 
         hidden = delete_entry(self.connection, URL, 1, 100)
         self.assertIsNotNone(hidden)
+        self.assertEqual(self.event_kinds(entry_id), ["resumed", "deleted"])
         self.assertNotIn(URL, [entry["url"] for entry in hidden["entries"]])
         history = self.connection.execute(
             "SELECT COUNT(*) AS total FROM poll_history WHERE poll_entry_id = %s",
@@ -73,6 +75,7 @@ class EntryDatabaseTests(unittest.TestCase):
         self.assertEqual(again["interval_seconds"], 30)
         self.assertEqual(again["timeout_seconds"], 5)
         self.assertEqual(again["health"], "UP")
+        self.assertEqual(self.event_kinds(entry_id), ["resumed", "deleted", "restored"])
 
         duplicate, no_page = save_new_entry(self.connection, URL, 30, 5, 1, 100)
         self.assertEqual(duplicate, "exists")
@@ -80,3 +83,15 @@ class EntryDatabaseTests(unittest.TestCase):
         visible = load_page(self.connection, 1, 100)
         ids = [entry["id"] for entry in visible["entries"]]
         self.assertEqual(ids.count(entry_id), 1)
+
+    def event_kinds(self, entry_id: int) -> list[str]:
+        rows = self.connection.execute(
+            """
+            SELECT kind
+            FROM poll_entry_events
+            WHERE poll_entry_id = %s
+            ORDER BY id
+            """,
+            (entry_id,),
+        ).fetchall()
+        return [row["kind"] for row in rows]

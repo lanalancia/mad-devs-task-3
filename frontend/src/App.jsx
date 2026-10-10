@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from './api.js'
+import Statistics from './Statistics.jsx'
 
 const PAGE_SIZES = [10, 25, 50, 100]
 const REFRESH_MS = 5000
@@ -25,6 +26,10 @@ function pollLabel(status) {
   return status === 'ACTIVE' ? 'polling' : 'paused'
 }
 
+function displayUrl(url) {
+  return url.length > 20 ? url.slice(0, 20) : url
+}
+
 function parseSeconds(text) {
   if (!/^[1-9]\d*$/.test(String(text).trim())) {
     return null
@@ -45,6 +50,7 @@ export default function App() {
   const [popup, setPopup] = useState(null)
   const [loginUser, setLoginUser] = useState('')
   const [loginPassword, setLoginPassword] = useState('')
+  const [statsEntry, setStatsEntry] = useState(null)
 
   const skipCommit = useRef(false)
   const skipBlank = useRef(false)
@@ -386,6 +392,26 @@ export default function App() {
     setPopup(null)
   }
 
+  function requireSignIn() {
+    setPopup({ kind: 'signin', lead: 'Please Sign in' })
+  }
+
+  async function openStats(entry) {
+    const focus = focusedCommit()
+    const draftText = draftRef.current
+    releaseFocus()
+    if (focus?.commit === 'blank' && focus.field === 'url') {
+      await createEntry()
+    }
+    if (focus?.commit === 'entry') {
+      const saved = await saveOtherEntry(focus, draftText)
+      if (!saved) {
+        return
+      }
+    }
+    setStatsEntry({ id: entry.id, url: entry.url })
+  }
+
   function changePageSize(event) {
     setPageSize(Number(event.target.value))
     setPage(1)
@@ -412,19 +438,38 @@ export default function App() {
   return (
     <>
       <header className="top">
-        {signedIn ? (
-          <>
-            <span>Signed in as {username}</span>{' '}
-            <button type="button" onClick={logout}>
-              Logout
+        <div>
+          {statsEntry ? (
+            <button type="button" onClick={() => setStatsEntry(null)}>
+              Return to main
             </button>
-          </>
-        ) : (
-          <button type="button" onClick={() => setPopup({ kind: 'signin' })}>
-            Sign In
-          </button>
-        )}
+          ) : null}
+        </div>
+        <div>
+          {signedIn ? (
+            <>
+              <span>Signed in as {username}</span>{' '}
+              <button type="button" onClick={logout}>
+                Logout
+              </button>
+            </>
+          ) : (
+            <button type="button" onClick={() => setPopup({ kind: 'signin' })}>
+              Sign In
+            </button>
+          )}
+        </div>
       </header>
+      {statsEntry ? (
+        <Statistics
+          entry={statsEntry}
+          token={token}
+          onAuthRequired={requireSignIn}
+          onSignedOut={logout}
+        />
+      ) : null}
+      {statsEntry ? null : (
+      <>
       <table>
         <thead>
           <tr>
@@ -437,13 +482,14 @@ export default function App() {
             <th>Error</th>
             <th>Last poll (UTC)</th>
             {signedIn ? <th>Delete</th> : null}
+            {signedIn ? <th>Statistics</th> : null}
           </tr>
         </thead>
         <tbody>
           {entries.map((entry) => (
             <tr key={entry.id}>
               <td>{entry.id}</td>
-              <td>{entry.url}</td>
+              <td title={entry.url}>{displayUrl(entry.url)}</td>
               <td>{signedIn ? secondsInput(entry, 'interval_seconds') : entry.interval_seconds}</td>
               <td>{signedIn ? secondsInput(entry, 'timeout_seconds') : entry.timeout_seconds}</td>
               <td>
@@ -467,6 +513,18 @@ export default function App() {
                     onClick={() => remove(entry)}
                   >
                     [X]
+                  </button>
+                </td>
+              ) : null}
+              {signedIn ? (
+                <td>
+                  <button
+                    type="button"
+                    title="Statistics"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => openStats(entry)}
+                  >
+                    [i]
                   </button>
                 </td>
               ) : null}
@@ -521,6 +579,7 @@ export default function App() {
               <td />
               <td />
               <td />
+              <td />
             </tr>
           ) : null}
         </tbody>
@@ -546,6 +605,8 @@ export default function App() {
           Next
         </button>
       </div>
+      </>
+      )}
       {popup ? (
         <div className="popup-backdrop">
           <div className="popup" role="dialog">
@@ -570,6 +631,7 @@ export default function App() {
             ) : null}
             {popup.kind === 'signin' ? (
               <form onSubmit={submitLogin}>
+                {popup.lead ? <p>{popup.lead}</p> : null}
                 <label>
                   Username{' '}
                   <input

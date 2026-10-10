@@ -14,14 +14,17 @@ from backend.entries import (
     authenticate,
     delete_entry,
     load_page,
+    require_entry_id,
     require_page,
     require_page_size,
     require_poll_status,
+    require_saved_url,
     require_seconds,
     require_url,
     save_new_entry,
     update_entry,
 )
+from backend.stats import load_statistics, parse_day, require_window
 
 ALREADY_EXISTS = "Can't create entry, already exists"
 
@@ -53,6 +56,9 @@ class ApiHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path, query = _split(self.path)
+        if path == "/api/stats":
+            self._stats(query)
+            return
         if path != "/api/entries":
             self._send_json(404, {"error": "Not found."})
             return
@@ -88,7 +94,8 @@ class ApiHandler(BaseHTTPRequestHandler):
             return
         try:
             payload = self._body()
-            url = require_url(payload.get("url"))
+            submitted = payload.get("url")
+            url = require_url(submitted)
             interval_seconds = require_seconds(payload.get("interval_seconds"), "Polling rate")
             timeout_seconds = require_seconds(payload.get("timeout_seconds"), "Timeout")
             status = require_poll_status(payload.get("status"))
@@ -107,11 +114,45 @@ class ApiHandler(BaseHTTPRequestHandler):
                 status,
                 page,
                 page_size,
+                submitted if isinstance(submitted, str) else None,
             )
             if updated is None:
                 self._send_json(404, {"error": "Entry not found."})
                 return
             self._send_json(200, updated)
+
+        self._with_db(run)
+
+    def _stats(self, query: dict[str, list[str]]) -> None:
+        user, failure = self._user()
+        if user is None:
+            self._auth_error(failure)
+            return
+        try:
+            entry_id = require_entry_id(_query_int(query, "id", 0))
+            window = require_window(_query_text(query, "window", "day"))
+            page = require_page(_query_int(query, "page", 1))
+            page_size = require_page_size(_query_int(query, "page_size", 10))
+            day_from = parse_day(_query_text(query, "from", ""))
+            day_to = parse_day(_query_text(query, "to", ""))
+        except EntryError as exc:
+            self._send_json(400, {"error": str(exc)})
+            return
+
+        def run(connection):
+            payload = load_statistics(
+                connection,
+                entry_id,
+                window,
+                day_from,
+                day_to,
+                page,
+                page_size,
+            )
+            if payload is None:
+                self._send_json(404, {"error": "Entry not found."})
+                return
+            self._send_json(200, payload)
 
         self._with_db(run)
 
@@ -173,7 +214,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             return
         try:
             payload = self._body()
-            url = require_url(payload.get("url"))
+            url = require_saved_url(payload.get("url"))
             page = require_page(payload.get("page"))
             page_size = require_page_size(payload.get("page_size"))
         except EntryError as exc:
@@ -269,6 +310,13 @@ def _split(path: str) -> tuple[str, dict[str, list[str]]]:
 
     parsed = urlsplit(path)
     return parsed.path, parse_qs(parsed.query)
+
+
+def _query_text(query: dict[str, list[str]], name: str, default: str) -> str:
+    values = query.get(name)
+    if not values:
+        return default
+    return values[0]
 
 
 def _query_int(query: dict[str, list[str]], name: str, default: int) -> object:

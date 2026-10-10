@@ -71,3 +71,9 @@ I think this is what task meant: checking the different pages of a same website.
 
 13:54 
 finished planning for "graph" step. Launching agent
+
+14:44
+Received and tested task 4.
+Now every entry has the graph for response time statistics, incidents history, and reason for incidents too
+Note: it looks like, it don't know the difference between incident and pause
+Note: log out on page refresh
