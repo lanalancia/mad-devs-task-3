@@ -78,3 +78,6 @@ Now every entry has the graph for response time statistics, incidents history, a
 Note: it looks like, it don't know the difference between incident and pause
 Note: log out on page refresh
 
+16:49
+Planned task #5, grouping the urls. 
+This will allow to assign urls to groupsa and mass pause them. And also will add the groupp emails array.
