@@ -1,45 +1,49 @@
 # mad-devs-task-3
 
-MadDevs task #3 website monitor
+MadDevs task #3 website monitor. Backend and frontend can run on different machines.
 
-Backend and frontend can run on different machines. Install only the requirements for the part you start.
+## 1. Install
 
-## Backend requirements
+You need Python 3.10 or newer, Docker (already installed and running), and Node.js 20 or newer with npm. The scripts do not install Docker or Node.js.
 
-- Python 3.10 or newer
-- Docker. Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) on Windows or macOS, or Docker Engine on Linux. Start Docker before setup. `install.py` downloads the `postgres:17` image and runs it. The script does not install Docker.
+Windows: run `start_venv.bat`. Linux: run `bash start_venv.sh`. If `.venv` is missing, the script creates it, then opens a shell with that environment active.
 
-## Frontend requirements
-
-- Node.js 20 or newer, including npm
-
-## Setup
-
-Create a virtual environment, install packages, and run the installer. Choose the Docker PostgreSQL option. That creates the application tables and the seed rows. Connecting an existing database only saves `config.ini` and does not change that database.
-
-On Windows, run `start_venv.bat`. It opens a command prompt with the virtual environment active. Then run:
+In that shell:
 
 ```
 python -m pip install -r requirements.txt
 python install.py
 ```
 
-On Linux, use `python3 -m venv .venv`, activate it, and run the same commands with that interpreter.
+Choose the Docker PostgreSQL option. That downloads `postgres:17` if needed, creates the tables, and loads the seed rows. A fresh install includes `admin` / `admin` from `init-users.json`. Running `install.py` again on that Docker database asks before replacing the tables. Connecting an existing database only writes `config.ini`.
 
-Running `install.py` again on the Docker database asks before replacing the application tables.
+Frontend packages are installed the first time you start the frontend.
 
-Frontend packages are installed when you start the frontend. To install them yourself, run `npm install` in the `frontend` directory.
+## 2. Run
 
-## Run
+Windows: `start.bat`. Linux: `bash start.sh`.
 
-On Windows, run `start.bat`. On Linux, run `bash start.sh`.
+- `1` starts the PostgreSQL container and the backend. The API port is `[http] port` in `config.ini` (17778). Stop with Ctrl+C.
+- `2` starts the frontend at http://localhost:17777. `frontend/config.ini` is the API address the page calls. Stop with Ctrl+C.
+- `3` starts four websites on 127.0.0.1, ports 17781–17784. Stop with Ctrl+C.
 
-- `1` starts the PostgreSQL container and the backend. SMTP is not started. The backend polls each active URL on its own interval, prints one line per saved result, and serves the HTTP API. Stop it with Ctrl+C.
-- `2` starts the frontend at http://localhost:17777. It does not start the backend. Stop it with Ctrl+C.
-- `3` starts four fixed websites on 127.0.0.1, ports 17781–17784: 200 after 100 ms, 404 after 300 ms, 200 that alternates between 100 ms and 900 ms every 10 minutes of UTC, and 200 after 6 seconds. Stop them with Ctrl+C.
+Pages, buttons, and popups are described in `docs/pages.md`.
 
-The API listens on port 17778. Change `[http] port` in `config.ini` to use another port. `frontend/config.ini` is the address the page calls. On one machine that is `http://localhost:17778`.
+To test the project all on the same machine, you have to run `start_venv.bat` and `start.bat` 3 times. Each time choosing the different option in `start.bat`
 
-The page asks for the current page of entries every 5 seconds. Sign in with a user from `init-users.json`. A fresh install includes `admin` / `admin`. Wrong credentials leave the page in guest mode. The token lasts one hour. Guests see `polling` or `paused`. A signed-in user can change the polling rate and timeout, pause or resume an entry, delete it, or add a URL on the empty row. Deleting hides the entry and keeps its history. Adding the same URL again restores that entry.
+## 3. Not done, and added on top
 
-A signed-in user opens Statistics with `[i]` on a row. That page shows the share of successful checks and the average response time for the last 24 hours, 7 days, or 30 days, a response-time graph, and the incident log. Under the last poll time it shows how long the current open incident has lasted, or "no incidents right now", and the response time of the latest saved poll. A new URL must use `http` or `https`, or start with `www` or `localhost`. A port is allowed. A slash that is the whole path is removed; a slash after a page path stays. Long addresses show the first 20 characters in the table, and the full address in the hint.
+Not done:
+
+- Expected string in the response body. A check compares only the HTTP status code.
+- Public status page by a link, without sign-in, limited to what the owner chose to show. A guest sees the URL list only.
+- Delivery to a real mailbox. Nothing is sent over SMTP. The same start and end messages are stored on the Mailing page.
+- Response time and the length of the current outage on the main status table. You can see that data on statistics page of that URL.
+
+Not specified in task, but added on top:
+
+- Username and password. Authorisation was optional.
+- Local websites from menu option `3`.
+- Response-time line chart: last 100 checks, timeouts off the line, breaks across an incident or a gap, scale from 0 to at least 1000 ms
+- Sign-in session kept in the browser for one hour.
+- One timeout is requested again and is not stored. The stored failure is the second timeout.

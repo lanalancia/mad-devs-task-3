@@ -34,5 +34,7 @@ exit /b 1
 call "%~dp0.venv\Scripts\activate.bat"
 echo.
 echo Virtual environment is active.
+echo Install packages with: python -m pip install -r requirements.txt
+echo Then run: python install.py
 echo.
 cmd /k

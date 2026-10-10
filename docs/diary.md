@@ -114,3 +114,6 @@ completed the task 8. tested. Mailing for groups works now.
 23:52
 Load testing shows that statistic page can't handle the load. 2 millions entries Makes backend fail on statistics page, even tho it shouldn't do that. Working on performance fix
 Decide to not do the "Public Page". I'll rather send the repo as is, then ask to move the deadline
+
+00:10 
+Optimisation worked, now i filling the docs and prepare to send it on review.

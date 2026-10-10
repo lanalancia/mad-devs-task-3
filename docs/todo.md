@@ -10,9 +10,8 @@ for future tasks
 - groups **DONE**
 - Polling interval should accepts 30 sec - 60 minutes **DONE**
 - Add setting for expected code in response **DONE**
-- Potential long load time if we have too much incidents in history. Should be fixed, need tests.
+- Potential long load time if we have too much incidents in history.=Tested, 2 millions of entries takes around 2 seconds. **DONE**
 - "maintenance scheduled" **DONE**
-- Configurable public page for guests 
 - For url info: how long is it down, how long is response time  **DONE**
 - Localhosted fake websites with various bahavior **DONE**
 - Fake SMTP **DONE**
