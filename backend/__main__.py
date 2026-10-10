@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from backend.config import load_http_config
 from backend.db import DatabaseError, connect, ensure_schema, load_active_entries
 from backend.entries import EntryError
+from backend.maintenance import reconcile_all, settle_ended_maintenances
 from backend.poll_control import PollControl
 from backend.polling import is_due
 from backend.server import ApiServer
@@ -63,6 +64,7 @@ def main() -> None:
 async def supervise(connection, control: PollControl) -> None:
     control.attach(asyncio.get_running_loop(), connection)
     invalid: set[int] = set()
+    _refresh_mail(connection, datetime.now(timezone.utc), full=True)
     while True:
         try:
             entries = load_active_entries(connection)
@@ -71,6 +73,7 @@ async def supervise(connection, control: PollControl) -> None:
             await asyncio.sleep(TICK_SECONDS)
             continue
         now = datetime.now(timezone.utc)
+        _refresh_mail(connection, now, full=False)
         running = control.running_ids()
         for entry in entries:
             entry_id = entry["id"]
@@ -88,6 +91,16 @@ async def supervise(connection, control: PollControl) -> None:
             except EntryError as exc:
                 print(f"Failed to start the poll for {entry['url']}: {exc}")
         await asyncio.sleep(_sleep_seconds(entries, control.running_ids(), now))
+
+
+def _refresh_mail(connection, now: datetime, full: bool) -> None:
+    try:
+        if full:
+            reconcile_all(connection, now)
+            return
+        settle_ended_maintenances(connection, now)
+    except Exception as exc:
+        print(f"Failed to update mail: {exc}")
 
 
 def _usable(entry: dict, invalid: set[int]) -> bool:

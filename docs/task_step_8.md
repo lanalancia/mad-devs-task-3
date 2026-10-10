@@ -44,9 +44,9 @@ Deleting the maintenance should be treated the same as the end of maintenance by
 3. on this page, we see a history of "sent" emails. Each entry has array of email addresses and mock message
 
 mesage samples: 
-- "AAA downtime incident. The incident started at BBB" 
-- "AAA downtime incident. The incident ended at BBB"
-Where AAA is a name of url, BBB is a timestamp
+- "AAA downtime incident started at BBB." 
+- "AAA downtime incident ended. It was started at BBB and ended at BBB."
+Where AAA is a name of url, BBB is a timestamps
 
 We send the email on the edge of the URL incident. At the start of incident and at the end of incident. 
 Email will be sent to all the receivers in a group, responsible for this URL.
@@ -69,6 +69,8 @@ We will not notify the receivers that one "bad" status changed to another "bad" 
 It is possible to overlap maintenances for same URL, same group, or one as a URL and one as a group. It is OK
 The logic from above appplies if we have at least one currently active mmaintenance for that URL. 
 The realistic scenario for it will be if XXX datacenter has a blackout and also flooding, and they have different schedule to fix it. 
+
+If we deleted the maintenance window after the maintenance ended, and all the mails were sent - we will not send the new maintenance letter. 
 
 
 Note:

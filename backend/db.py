@@ -83,6 +83,7 @@ def ensure_schema(connection: psycopg.Connection) -> None:
     _ensure_deleted_status(connection)
     _ensure_events_table(connection)
     _ensure_groups(connection)
+    _ensure_maintenance(connection)
     _normalize_stored_urls(connection)
 
 
@@ -169,6 +170,62 @@ def _ensure_groups(connection: psycopg.Connection) -> None:
             ON poll_entries (group_id)
         """
     )
+
+
+def _ensure_maintenance(connection: psycopg.Connection) -> None:
+    """Add maintenance windows and the fake mail history on older databases."""
+    if not _columns(connection, "maintenances"):
+        connection.execute(
+            """
+            CREATE TABLE maintenances (
+                id bigserial PRIMARY KEY,
+                target_kind text NOT NULL CHECK (target_kind IN ('url', 'group')),
+                poll_entry_id bigint REFERENCES poll_entries (id) ON DELETE CASCADE,
+                poll_group_id bigint REFERENCES poll_groups (id) ON DELETE CASCADE,
+                starts_at timestamptz NOT NULL,
+                ends_at timestamptz NOT NULL,
+                settled_at timestamptz,
+                CHECK (ends_at > starts_at),
+                CHECK (
+                    (target_kind = 'url' AND poll_entry_id IS NOT NULL AND poll_group_id IS NULL)
+                    OR (target_kind = 'group' AND poll_group_id IS NOT NULL AND poll_entry_id IS NULL)
+                )
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX maintenances_entry_idx ON maintenances (poll_entry_id)"
+        )
+        connection.execute(
+            "CREATE INDEX maintenances_group_idx ON maintenances (poll_group_id)"
+        )
+    if not _columns(connection, "incident_mail"):
+        connection.execute(
+            """
+            CREATE TABLE incident_mail (
+                poll_entry_id bigint NOT NULL REFERENCES poll_entries (id) ON DELETE CASCADE,
+                incident_start timestamptz NOT NULL,
+                started text NOT NULL CHECK (started IN ('wait', 'sent', 'skip')),
+                ended text NOT NULL CHECK (ended IN ('wait', 'sent', 'skip')),
+                PRIMARY KEY (poll_entry_id, incident_start)
+            )
+            """
+        )
+    if not _columns(connection, "sent_mails"):
+        connection.execute(
+            """
+            CREATE TABLE sent_mails (
+                id bigserial PRIMARY KEY,
+                poll_entry_id bigint NOT NULL REFERENCES poll_entries (id) ON DELETE CASCADE,
+                incident_start timestamptz NOT NULL,
+                kind text NOT NULL CHECK (kind IN ('started', 'ended')),
+                addresses text[] NOT NULL,
+                message text NOT NULL,
+                created_at timestamptz NOT NULL,
+                UNIQUE (poll_entry_id, incident_start, kind)
+            )
+            """
+        )
 
 
 def _normalize_stored_urls(connection: psycopg.Connection) -> None:

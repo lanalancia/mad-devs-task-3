@@ -1,9 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from './api.js'
 import Groups from './Groups.jsx'
+import Mailing from './Mailing.jsx'
+import Maintenances from './Maintenances.jsx'
 import Statistics from './Statistics.jsx'
 
 const PAGE_SIZES = [10, 25, 50, 100]
+const HASH_VIEWS = {
+  '#groups': 'groups',
+  '#maintenances': 'maintenances',
+  '#mailing': 'mailing',
+}
 const REFRESH_MS = 5000
 const SESSION_KEY = 'monitorSession'
 const BLANK_START = { url: '', interval: '30', timeout: '5', expectedCode: '200' }
@@ -191,16 +198,16 @@ export default function App() {
 
   useEffect(() => {
     function applyHash() {
-      const wantsGroups = window.location.hash === '#groups'
-      if (wantsGroups && !session.current.token) {
+      const next = HASH_VIEWS[window.location.hash] ?? 'urls'
+      if (next !== 'urls' && !session.current.token) {
         window.history.replaceState(null, '', window.location.pathname + window.location.search)
         setView('urls')
         return
       }
-      if (wantsGroups) {
+      if (next !== 'urls') {
         setStatsEntry(null)
       }
-      setView(wantsGroups ? 'groups' : 'urls')
+      setView(next)
     }
 
     applyHash()
@@ -645,17 +652,22 @@ export default function App() {
   return (
     <>
       <header className="top">
-        <div>
-          {view === 'groups' && signedIn ? (
-            <button type="button" onClick={() => { window.location.hash = '' }}>
-              URLs
-            </button>
-          ) : null}
-          {signedIn && view !== 'groups' && !statsEntry ? <a href="#groups">Groups</a> : null}
+        <div className="nav">
           {statsEntry ? (
             <button type="button" onClick={() => setStatsEntry(null)}>
               Return to main
             </button>
+          ) : signedIn ? (
+            <>
+              {view !== 'urls' ? (
+                <button type="button" onClick={() => { window.location.hash = '' }}>
+                  URLs
+                </button>
+              ) : null}
+              {view !== 'groups' ? <a href="#groups">Groups</a> : null}
+              {view !== 'maintenances' ? <a href="#maintenances">Maintenances</a> : null}
+              {view !== 'mailing' ? <a href="#mailing">Mailing</a> : null}
+            </>
           ) : null}
         </div>
         <div>
@@ -674,7 +686,11 @@ export default function App() {
         </div>
       </header>
       {view === 'groups' && signedIn ? <Groups token={token} onError={showRequestError} /> : null}
-      {view !== 'groups' && statsEntry ? (
+      {view === 'maintenances' && signedIn ? (
+        <Maintenances token={token} onError={showRequestError} />
+      ) : null}
+      {view === 'mailing' && signedIn ? <Mailing token={token} onError={showRequestError} /> : null}
+      {view === 'urls' && statsEntry ? (
         <Statistics
           entry={statsEntry}
           token={token}
@@ -682,7 +698,7 @@ export default function App() {
           onSignedOut={logout}
         />
       ) : null}
-      {view !== 'groups' && !statsEntry ? (
+      {view === 'urls' && !statsEntry ? (
       <>
       <table>
         <thead>

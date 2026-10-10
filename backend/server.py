@@ -43,6 +43,19 @@ from backend.groups import (
     update_email,
     update_group,
 )
+from backend.maintenance import (
+    MaintenanceError,
+    create_maintenance,
+    delete_maintenance,
+    list_mails,
+    load_maintenances,
+    reconcile_url,
+    require_maintenance_id,
+    require_target_id,
+    require_target_kind,
+    require_timestamp,
+    update_maintenance,
+)
 from backend.poll_control import ALREADY_POLLING
 from backend.stats import load_statistics, parse_day, require_window
 
@@ -82,6 +95,12 @@ class ApiHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/groups":
             self._groups()
+            return
+        if path == "/api/maintenances":
+            self._maintenances(query)
+            return
+        if path == "/api/mails":
+            self._mails()
             return
         if path != "/api/entries":
             self._send_json(404, {"error": "Not found."})
@@ -123,6 +142,12 @@ class ApiHandler(BaseHTTPRequestHandler):
         if path == "/api/groups/emails/delete":
             self._delete_email()
             return
+        if path == "/api/maintenances":
+            self._create_maintenance()
+            return
+        if path == "/api/maintenances/delete":
+            self._delete_maintenance()
+            return
         self._send_json(404, {"error": "Not found."})
 
     def do_PATCH(self) -> None:
@@ -132,6 +157,9 @@ class ApiHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/groups/emails":
             self._update_email()
+            return
+        if path == "/api/maintenances":
+            self._update_maintenance()
             return
         if path != "/api/entries":
             self._send_json(404, {"error": "Not found."})
@@ -483,6 +511,87 @@ class ApiHandler(BaseHTTPRequestHandler):
             if updated is None:
                 self._send_json(404, {"error": "Entry not found."})
                 return
+            try:
+                reconcile_url(connection, url)
+            except Exception as exc:
+                print(f"Failed to update mail for {url}: {exc}")
+            self._send_json(200, updated)
+
+        self._with_db(run)
+
+    def _maintenances(self, query: dict[str, list[str]]) -> None:
+        user, failure = self._user()
+        if user is None:
+            self._auth_error(failure)
+            return
+        try:
+            pages = _maintenance_pages(query, from_query=True)
+        except EntryError as exc:
+            self._send_json(400, {"error": str(exc)})
+            return
+        self._with_db(lambda connection: self._send_json(200, load_maintenances(connection, *pages)))
+
+    def _mails(self) -> None:
+        user, failure = self._user()
+        if user is None:
+            self._auth_error(failure)
+            return
+        self._with_db(lambda connection: self._send_json(200, list_mails(connection)))
+
+    def _create_maintenance(self) -> None:
+        self._change_maintenance(create_maintenance)
+
+    def _update_maintenance(self) -> None:
+        self._change_maintenance(update_maintenance, with_id=True)
+
+    def _delete_maintenance(self) -> None:
+        user, failure = self._user()
+        if user is None:
+            self._auth_error(failure)
+            return
+        try:
+            payload = self._body()
+            maintenance_id = require_maintenance_id(payload.get("id"))
+            pages = _maintenance_pages(payload, from_query=False)
+        except (EntryError, MaintenanceError) as exc:
+            self._send_json(400, {"error": str(exc)})
+            return
+
+        def run(connection):
+            updated = delete_maintenance(connection, maintenance_id, *pages)
+            if updated is None:
+                self._send_json(404, {"error": "Maintenance not found."})
+                return
+            self._send_json(200, updated)
+
+        self._with_db(run)
+
+    def _change_maintenance(self, action, with_id: bool = False) -> None:
+        user, failure = self._user()
+        if user is None:
+            self._auth_error(failure)
+            return
+        try:
+            payload = self._body()
+            maintenance_id = require_maintenance_id(payload.get("id")) if with_id else None
+            target_kind = require_target_kind(payload.get("target_kind"))
+            target_id = require_target_id(payload.get("target_id"))
+            starts_at = require_timestamp(payload.get("starts_at"), "Maintenance start")
+            ends_at = require_timestamp(payload.get("ends_at"), "Maintenance end")
+            pages = _maintenance_pages(payload, from_query=False)
+        except (EntryError, MaintenanceError) as exc:
+            self._send_json(400, {"error": str(exc)})
+            return
+
+        def run(connection):
+            arguments = []
+            if maintenance_id is not None:
+                arguments.append(maintenance_id)
+            arguments.extend((target_kind, target_id, starts_at, ends_at, *pages))
+            updated = action(connection, *arguments)
+            if updated is None:
+                self._send_json(404, {"error": "Maintenance not found."})
+                return
             self._send_json(200, updated)
 
         self._with_db(run)
@@ -534,7 +643,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             return
         try:
             action(connection)
-        except (EntryError, GroupError) as exc:
+        except (EntryError, GroupError, MaintenanceError) as exc:
             self._send_json(400, {"error": str(exc)})
         except Exception as exc:
             print(f"HTTP request failed: {exc}")
@@ -574,6 +683,22 @@ def _query_text(query: dict[str, list[str]], name: str, default: str) -> str:
     if not values:
         return default
     return values[0]
+
+
+def _maintenance_pages(source: dict, from_query: bool) -> tuple[int, int, int, int]:
+    if from_query:
+        return (
+            require_page(_query_int(source, "url_page", 1)),
+            require_page_size(_query_int(source, "url_page_size", 10)),
+            require_page(_query_int(source, "group_page", 1)),
+            require_page_size(_query_int(source, "group_page_size", 10)),
+        )
+    return (
+        require_page(source.get("url_page", 1)),
+        require_page_size(source.get("url_page_size", 10)),
+        require_page(source.get("group_page", 1)),
+        require_page_size(source.get("group_page_size", 10)),
+    )
 
 
 def _query_int(query: dict[str, list[str]], name: str, default: int) -> object:

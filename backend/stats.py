@@ -309,6 +309,11 @@ def _incidents(checks: list[dict], interval_seconds: int, now: datetime) -> list
     return found
 
 
+def incident_bounds(checks: list[dict], interval_seconds: int, now: datetime) -> list[dict]:
+    """Same incidents as the statistics journal. end is None while one is open."""
+    return _incidents(checks, interval_seconds, now)
+
+
 def _gaps(checks: list[dict], events: list[dict], interval_seconds: int) -> list[dict]:
     found: list[dict] = []
     for previous, following in zip(checks, checks[1:]):

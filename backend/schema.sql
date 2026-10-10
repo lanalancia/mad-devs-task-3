@@ -50,3 +50,40 @@ CREATE TABLE users (
     username text NOT NULL UNIQUE,
     password text NOT NULL
 );
+
+CREATE TABLE maintenances (
+    id bigserial PRIMARY KEY,
+    target_kind text NOT NULL CHECK (target_kind IN ('url', 'group')),
+    poll_entry_id bigint REFERENCES poll_entries (id) ON DELETE CASCADE,
+    poll_group_id bigint REFERENCES poll_groups (id) ON DELETE CASCADE,
+    starts_at timestamptz NOT NULL,
+    ends_at timestamptz NOT NULL,
+    settled_at timestamptz,
+    CHECK (ends_at > starts_at),
+    CHECK (
+        (target_kind = 'url' AND poll_entry_id IS NOT NULL AND poll_group_id IS NULL)
+        OR (target_kind = 'group' AND poll_group_id IS NOT NULL AND poll_entry_id IS NULL)
+    )
+);
+
+CREATE INDEX maintenances_entry_idx ON maintenances (poll_entry_id);
+CREATE INDEX maintenances_group_idx ON maintenances (poll_group_id);
+
+CREATE TABLE incident_mail (
+    poll_entry_id bigint NOT NULL REFERENCES poll_entries (id) ON DELETE CASCADE,
+    incident_start timestamptz NOT NULL,
+    started text NOT NULL CHECK (started IN ('wait', 'sent', 'skip')),
+    ended text NOT NULL CHECK (ended IN ('wait', 'sent', 'skip')),
+    PRIMARY KEY (poll_entry_id, incident_start)
+);
+
+CREATE TABLE sent_mails (
+    id bigserial PRIMARY KEY,
+    poll_entry_id bigint NOT NULL REFERENCES poll_entries (id) ON DELETE CASCADE,
+    incident_start timestamptz NOT NULL,
+    kind text NOT NULL CHECK (kind IN ('started', 'ended')),
+    addresses text[] NOT NULL,
+    message text NOT NULL,
+    created_at timestamptz NOT NULL,
+    UNIQUE (poll_entry_id, incident_start, kind)
+);

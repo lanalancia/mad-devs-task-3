@@ -9,6 +9,11 @@ body {
   align-items: center;
 }
 
+.nav a,
+.nav button {
+  margin-right: 8px;
+}
+
 table {
   border-collapse: collapse;
   margin-top: 12px;
@@ -32,6 +37,14 @@ input[type='password'] {
 
 input[type='number'] {
   width: 6em;
+}
+
+input[type='datetime-local'] {
+  width: 12em;
+}
+
+.mail-message {
+  white-space: pre-wrap;
 }
 
 .popup-backdrop {

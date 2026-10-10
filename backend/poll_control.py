@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from datetime import datetime, timezone
 
 from backend.db import insert_history
 from backend.entries import EntryError
+from backend.maintenance import reconcile_entry
 from backend.polling import format_console, run_cycle
 
 ALREADY_POLLING = "Can't request this right now. A request is already waiting for a response."
@@ -83,4 +85,8 @@ async def run_poll(connection, entry: dict, control: PollControl) -> None:
         return
     finally:
         control.release(entry_id)
+    try:
+        reconcile_entry(connection, entry_id, datetime.now(timezone.utc))
+    except Exception as exc:
+        print(f"Failed to update mail for {url}: {exc}")
     print(format_console(url, outcome.http_status, outcome.message))

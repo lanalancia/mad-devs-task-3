@@ -5,7 +5,7 @@ cd /d "%~dp0"
 :menu
 echo.
 echo Services:
-echo   1. backend+db+smtp
+echo   1. backend+db
 echo   2. frontend
 echo   3. mock-website
 echo.
@@ -31,7 +31,7 @@ call :ensure_deps
 if errorlevel 1 goto menu
 call :ensure_db
 if errorlevel 1 goto menu
-echo Starting backend. The HTTP API uses the port in config.ini. SMTP is not started in this step.
+echo Starting backend. The HTTP API uses the port in config.ini.
 .venv\Scripts\python.exe -m backend
 echo Backend stopped.
 goto menu

@@ -58,7 +58,7 @@ start_backend() {
         echo "PostgreSQL is not accepting connections yet."
         return 0
     fi
-    echo "Starting backend. The HTTP API uses the port in config.ini. SMTP is not started in this step."
+    echo "Starting backend. The HTTP API uses the port in config.ini."
     .venv/bin/python -m backend || true
     echo "Backend stopped."
 }
@@ -94,7 +94,7 @@ start_frontend() {
 while true; do
     echo ""
     echo "Services:"
-    echo "  1. backend+db+smtp"
+    echo "  1. backend+db"
     echo "  2. frontend"
     echo "  3. mock-website"
     echo ""

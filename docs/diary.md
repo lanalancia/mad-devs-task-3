@@ -107,3 +107,5 @@ made plan for task #7: mock websites for testing
 task 7 works. I now have fake websites
 Also planning for both maintenance and email.
 For easier access, will make a special page "maintenances", that will let to set up a maintenance for both groups and URLs
+
+22:59 completed the task 8. tested. Mailing for groupps works now.
