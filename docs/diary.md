@@ -108,4 +108,9 @@ task 7 works. I now have fake websites
 Also planning for both maintenance and email.
 For easier access, will make a special page "maintenances", that will let to set up a maintenance for both groups and URLs
 
-22:59 completed the task 8. tested. Mailing for groupps works now.
+22:59 
+completed the task 8. tested. Mailing for groups works now.
+
+23:52
+Load testing shows that statistic page can't handle the load. 2 millions entries Makes backend fail on statistics page, even tho it shouldn't do that. Working on performance fix
+Decide to not do the "Public Page". I'll rather send the repo as is, then ask to move the deadline

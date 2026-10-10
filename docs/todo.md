@@ -11,9 +11,9 @@ for future tasks
 - Polling interval should accepts 30 sec - 60 minutes **DONE**
 - Add setting for expected code in response **DONE**
 - Potential long load time if we have too much incidents in history. Should be fixed, need tests.
-- "maintenance scheduled"
+- "maintenance scheduled" **DONE**
 - Configurable public page for guests 
 - For url info: how long is it down, how long is response time  **DONE**
 - Localhosted fake websites with various bahavior **DONE**
-- Fake SMTP
+- Fake SMTP **DONE**
 

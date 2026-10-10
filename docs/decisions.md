@@ -30,3 +30,6 @@ For simplicity, everything is English. This to not have problem with Cyrillic te
 
 **Timeout policy:**
 If we got timeout on request - we will try twice. We will assume that single timeout is a packet loss and should not be stored in history. We will try sending a packet once more, and if there's a second tieout - we will add this in history
+
+**Public Page**
+I will skip this one too because i am not sure what to put on a public page. For now, there is a guest mode, that only shows the guest the overview, with no precise statistic. I think it will pass for now.
