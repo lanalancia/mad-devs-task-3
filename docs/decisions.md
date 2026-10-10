@@ -12,8 +12,8 @@ PostgreSQL, because task mentions it as preferred DB.
 Installation script will prompt the user to download the postgres:17 Docker image or use an existing database. Docker itself must already be installed.
 
 **EMAIL:**
-The task wants me to use smtp. It allows to use mock smtp. 
-I will use Mailpit for mock, but then a config will allow to work with real SMTP. As far as I know, the protocol is the same.
+won't do. Should've take more time for this, but i see i can't make itt in time. And i decide to not ask for more time.
+instead, i make a mock email history.
 
 
 **Agent:** 
