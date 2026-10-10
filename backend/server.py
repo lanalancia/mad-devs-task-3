@@ -15,7 +15,10 @@ from backend.entries import (
     authenticate,
     delete_entry,
     load_page,
+    load_poll_target,
     require_entry_id,
+    require_expected_code,
+    require_interval,
     require_page,
     require_page_size,
     require_poll_status,
@@ -40,6 +43,7 @@ from backend.groups import (
     update_email,
     update_group,
 )
+from backend.poll_control import ALREADY_POLLING
 from backend.stats import load_statistics, parse_day, require_window
 
 ALREADY_EXISTS = "Can't create entry, already exists"
@@ -49,7 +53,7 @@ class ApiServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, port: int, jwt_secret: str) -> None:
+    def __init__(self, port: int, jwt_secret: str, poll_control=None) -> None:
         self.address_family = socket.AF_INET6
         try:
             super().__init__(("::", port), ApiHandler)
@@ -57,6 +61,7 @@ class ApiServer(ThreadingHTTPServer):
             self.address_family = socket.AF_INET
             super().__init__(("0.0.0.0", port), ApiHandler)
         self.jwt_secret = jwt_secret
+        self.poll_control = poll_control
 
     def server_bind(self) -> None:
         if self.address_family == socket.AF_INET6:
@@ -93,6 +98,9 @@ class ApiHandler(BaseHTTPRequestHandler):
         path, _query = _split(self.path)
         if path == "/api/login":
             self._login()
+            return
+        if path == "/api/entries/poll":
+            self._poll_now()
             return
         if path == "/api/entries":
             self._create()
@@ -136,8 +144,9 @@ class ApiHandler(BaseHTTPRequestHandler):
             payload = self._body()
             submitted = payload.get("url")
             url = require_url(submitted)
-            interval_seconds = require_seconds(payload.get("interval_seconds"), "Polling rate")
+            interval_seconds = require_interval(payload.get("interval_seconds"))
             timeout_seconds = require_seconds(payload.get("timeout_seconds"), "Timeout")
+            expected_code = require_expected_code(payload.get("expected_code"))
             status = require_poll_status(payload.get("status"))
             page = require_page(payload.get("page"))
             page_size = require_page_size(payload.get("page_size"))
@@ -155,6 +164,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 page,
                 page_size,
                 submitted if isinstance(submitted, str) else None,
+                expected_code,
             )
             if updated is None:
                 self._send_json(404, {"error": "Entry not found."})
@@ -223,8 +233,9 @@ class ApiHandler(BaseHTTPRequestHandler):
         try:
             payload = self._body()
             url = require_url(payload.get("url"))
-            interval_seconds = require_seconds(payload.get("interval_seconds"), "Polling rate")
+            interval_seconds = require_interval(payload.get("interval_seconds"))
             timeout_seconds = require_seconds(payload.get("timeout_seconds"), "Timeout")
+            expected_code = require_expected_code(payload.get("expected_code"))
             page = require_page(payload.get("page"))
             page_size = require_page_size(payload.get("page_size"))
         except EntryError as exc:
@@ -239,6 +250,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 timeout_seconds,
                 page,
                 page_size,
+                expected_code,
             )
             if action == "exists":
                 self._send_json(409, {"error": ALREADY_EXISTS})
@@ -269,6 +281,51 @@ class ApiHandler(BaseHTTPRequestHandler):
             self._send_json(200, updated)
 
         self._with_db(run)
+
+    def _poll_now(self) -> None:
+        user, failure = self._user()
+        if user is None:
+            self._auth_error(failure)
+            return
+        try:
+            payload = self._body()
+            entry_id = require_entry_id(payload.get("id"))
+        except EntryError as exc:
+            self._send_json(400, {"error": str(exc)})
+            return
+
+        found: dict[str, dict] = {}
+
+        def run(connection):
+            entry = load_poll_target(connection, entry_id)
+            if entry is None:
+                self._send_json(404, {"error": "Entry not found."})
+                return
+            found["entry"] = entry
+
+        self._with_db(run)
+        entry = found.get("entry")
+        if entry is None:
+            return
+        control = self.server.poll_control
+        if control is None:
+            self._send_json(500, {"error": "Polling is not running."})
+            return
+        try:
+            finished = control.request_now(entry)
+        except EntryError as exc:
+            self._send_json(400, {"error": str(exc)})
+            return
+        if finished is None:
+            self._send_json(409, {"error": ALREADY_POLLING})
+            return
+        try:
+            finished.result()
+        except Exception as exc:
+            print(f"Poll now failed for {entry['url']}: {exc}")
+            self._send_json(500, {"error": "The poll did not finish."})
+            return
+        self._send_json(200, {"started": True})
 
     def _groups(self) -> None:
         user, failure = self._user()

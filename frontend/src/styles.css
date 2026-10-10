@@ -30,6 +30,10 @@ input[type='password'] {
   width: 16em;
 }
 
+input[type='number'] {
+  width: 6em;
+}
+
 .popup-backdrop {
   position: fixed;
   inset: 0;

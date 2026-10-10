@@ -8,6 +8,8 @@ from backend.entries import (
     clamp_page,
     creation_action,
     health_fields,
+    require_expected_code,
+    require_interval,
     require_page_size,
     require_saved_url,
     require_seconds,
@@ -69,6 +71,27 @@ class PageTests(unittest.TestCase):
         self.assertEqual(require_saved_url("https://www.anime.com/"), "https://www.anime.com/")
         with self.assertRaises(EntryError):
             require_url("ftp://google.com")
+
+    def test_interval_is_30_seconds_to_an_hour(self):
+        self.assertEqual(require_interval(30), 30)
+        self.assertEqual(require_interval(3600), 3600)
+        with self.assertRaises(EntryError):
+            require_interval(29)
+        with self.assertRaises(EntryError):
+            require_interval(3601)
+        with self.assertRaises(EntryError):
+            require_interval(True)
+
+    def test_expected_code_is_an_http_status(self):
+        self.assertEqual(require_expected_code(100), 100)
+        self.assertEqual(require_expected_code(200), 200)
+        self.assertEqual(require_expected_code(599), 599)
+        with self.assertRaises(EntryError):
+            require_expected_code(99)
+        with self.assertRaises(EntryError):
+            require_expected_code(600)
+        with self.assertRaises(EntryError):
+            require_expected_code(True)
 
     def test_seed_urls_are_accepted(self):
         payload = json.loads(Path("init-poll-entries.json").read_text(encoding="utf-8"))

@@ -146,6 +146,7 @@ def build_statistics(
         "page": page,
         "page_size": page_size,
         "total": total,
+        "last_polled_at": _iso(ordered[-1]["polled_at"]) if ordered else None,
         "rows": [_serialize_row(row) for row in visible],
     }
 

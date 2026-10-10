@@ -5,7 +5,32 @@ import Statistics from './Statistics.jsx'
 
 const PAGE_SIZES = [10, 25, 50, 100]
 const REFRESH_MS = 5000
-const BLANK_START = { url: '', interval: '30', timeout: '5' }
+const SESSION_KEY = 'monitorSession'
+const BLANK_START = { url: '', interval: '30', timeout: '5', expectedCode: '200' }
+const FIELD_LIMITS = {
+  interval_seconds: { min: 30, max: 3600, label: 'Polling rate' },
+  timeout_seconds: { min: 1, max: null, label: 'Timeout' },
+  expected_code: { min: 100, max: 599, label: 'Expected code' },
+}
+
+function readSession() {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY)
+    if (!raw) {
+      return { token: '', username: '' }
+    }
+    const parsed = JSON.parse(raw)
+    if (typeof parsed?.token !== 'string' || typeof parsed?.username !== 'string') {
+      return { token: '', username: '' }
+    }
+    if (!parsed.token || !parsed.username) {
+      return { token: '', username: '' }
+    }
+    return { token: parsed.token, username: parsed.username }
+  } catch {
+    return { token: '', username: '' }
+  }
+}
 
 function formatUtc(iso) {
   if (!iso) {
@@ -34,13 +59,45 @@ function parseSeconds(text) {
   return Number(String(text).trim())
 }
 
+function parseBounded(text, min, max) {
+  const parsed = parseSeconds(text)
+  if (parsed == null || parsed < min || parsed > max) {
+    return null
+  }
+  return parsed
+}
+
+function parseField(field, text) {
+  const limit = FIELD_LIMITS[field]
+  if (limit.max == null) {
+    return parseSeconds(text)
+  }
+  return parseBounded(text, limit.min, limit.max)
+}
+
+function fieldError(field) {
+  const limit = FIELD_LIMITS[field]
+  if (limit.max == null) {
+    return `${limit.label} must be an integer of at least 1.`
+  }
+  return `${limit.label} must be an integer from ${limit.min} to ${limit.max}.`
+}
+
+function withField(entry, field, parsed) {
+  return {
+    interval: field === 'interval_seconds' ? parsed : entry.interval_seconds,
+    timeout: field === 'timeout_seconds' ? parsed : entry.timeout_seconds,
+    expectedCode: field === 'expected_code' ? parsed : entry.expected_code ?? 200,
+  }
+}
+
 export default function App() {
   const [pageSize, setPageSize] = useState(10)
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
   const [entries, setEntries] = useState([])
-  const [token, setToken] = useState('')
-  const [username, setUsername] = useState('')
+  const [token, setToken] = useState(() => readSession().token)
+  const [username, setUsername] = useState(() => readSession().username)
   const [editing, setEditing] = useState(null)
   const [draft, setDraft] = useState('')
   const [blank, setBlank] = useState(BLANK_START)
@@ -51,6 +108,7 @@ export default function App() {
   const [view, setView] = useState('urls')
   const [groupOptions, setGroupOptions] = useState([])
 
+  const pendingEdit = useRef(0)
   const skipCommit = useRef(false)
   const skipBlank = useRef(false)
   const blankOrigin = useRef('')
@@ -69,6 +127,14 @@ export default function App() {
 
   const pageCount = Math.max(1, Math.ceil(total / pageSize))
   const signedIn = Boolean(token)
+
+  useEffect(() => {
+    if (token && username) {
+      localStorage.setItem(SESSION_KEY, JSON.stringify({ token, username }))
+      return
+    }
+    localStorage.removeItem(SESSION_KEY)
+  }, [token, username])
 
   function applyPage(data) {
     setEntries(data.entries)
@@ -212,7 +278,8 @@ export default function App() {
     }
   }
 
-  async function sendUpdate(entry, interval, timeout, status) {
+  async function sendUpdate(entry, interval, timeout, expectedCode, status) {
+    const mine = ++pendingEdit.current
     generation.current += 1
     try {
       const data = await api('/api/entries', {
@@ -222,21 +289,24 @@ export default function App() {
           url: entry.url,
           interval_seconds: interval,
           timeout_seconds: timeout,
+          expected_code: expectedCode,
           status,
           page: session.current.page,
           page_size: session.current.pageSize,
         },
       })
+      if (mine !== pendingEdit.current) {
+        return
+      }
       generation.current += 1
       applyPage(data)
     } catch (error) {
+      if (mine !== pendingEdit.current) {
+        return
+      }
       generation.current += 1
       showRequestError(error)
     }
-  }
-
-  function fieldLabel(field) {
-    return field === 'interval_seconds' ? 'Polling rate' : 'Timeout'
   }
 
   async function commitField(entry, field) {
@@ -245,18 +315,29 @@ export default function App() {
       setEditing(null)
       return
     }
-    const parsed = parseSeconds(draftRef.current)
+    const parsed = parseField(field, draftRef.current)
     setEditing(null)
     if (parsed == null) {
-      setPopup({ kind: 'error', message: `${fieldLabel(field)} must be an integer of at least 1.` })
+      setPopup({ kind: 'error', message: fieldError(field) })
       return
     }
     if (parsed === entry[field]) {
       return
     }
-    const interval = field === 'interval_seconds' ? parsed : entry.interval_seconds
-    const timeout = field === 'timeout_seconds' ? parsed : entry.timeout_seconds
-    await sendUpdate(entry, interval, timeout, entry.status)
+    const next = withField(entry, field, parsed)
+    await sendUpdate(entry, next.interval, next.timeout, next.expectedCode, entry.status)
+  }
+
+  function changeBounded(entry, field, raw) {
+    draftRef.current = raw
+    setEditing({ id: entry.id, field })
+    setDraft(raw)
+    const parsed = parseField(field, raw)
+    if (parsed == null || parsed === entry[field]) {
+      return
+    }
+    const next = withField(entry, field, parsed)
+    sendUpdate(entry, next.interval, next.timeout, next.expectedCode, entry.status)
   }
 
   function beginEdit(entry, field) {
@@ -305,17 +386,16 @@ export default function App() {
     if (!entry) {
       return true
     }
-    const parsed = parseSeconds(draftText)
+    const parsed = parseField(focus.field, draftText)
     if (parsed == null) {
-      setPopup({ kind: 'error', message: `${fieldLabel(focus.field)} must be an integer of at least 1.` })
+      setPopup({ kind: 'error', message: fieldError(focus.field) })
       return false
     }
     if (parsed === entry[focus.field]) {
       return true
     }
-    const interval = focus.field === 'interval_seconds' ? parsed : entry.interval_seconds
-    const timeout = focus.field === 'timeout_seconds' ? parsed : entry.timeout_seconds
-    await sendUpdate(entry, interval, timeout, entry.status)
+    const next = withField(entry, focus.field, parsed)
+    await sendUpdate(entry, next.interval, next.timeout, next.expectedCode, entry.status)
     return true
   }
 
@@ -334,20 +414,20 @@ export default function App() {
     }
     let interval = entry.interval_seconds
     let timeout = entry.timeout_seconds
+    let expectedCode = entry.expected_code ?? 200
     if (focus?.commit === 'entry' && focus.entryId === entry.id) {
-      const parsed = parseSeconds(draftText)
+      const parsed = parseField(focus.field, draftText)
       if (parsed == null) {
-        setPopup({ kind: 'error', message: `${fieldLabel(focus.field)} must be an integer of at least 1.` })
+        setPopup({ kind: 'error', message: fieldError(focus.field) })
         return
       }
-      if (focus.field === 'interval_seconds') {
-        interval = parsed
-      } else {
-        timeout = parsed
-      }
+      const next = withField(entry, focus.field, parsed)
+      interval = next.interval
+      timeout = next.timeout
+      expectedCode = next.expectedCode
     }
     const status = entry.status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE'
-    await sendUpdate(entry, interval, timeout, status)
+    await sendUpdate(entry, interval, timeout, expectedCode, status)
   }
 
   async function remove(entry) {
@@ -391,10 +471,15 @@ export default function App() {
     if (!url) {
       return
     }
-    const interval = parseSeconds(current.interval)
+    const interval = parseBounded(current.interval, 30, 3600)
     const timeout = parseSeconds(current.timeout)
-    if (interval == null || timeout == null) {
-      setPopup({ kind: 'error', message: 'Polling rate and timeout must be integers of at least 1.' })
+    const expectedCode = parseBounded(current.expectedCode, 100, 599)
+    if (interval == null || timeout == null || expectedCode == null) {
+      setPopup({
+        kind: 'error',
+        message:
+          'Polling rate must be from 30 to 3600, timeout at least 1, and expected code from 100 to 599.',
+      })
       return
     }
     creating.current = true
@@ -407,6 +492,7 @@ export default function App() {
           url,
           interval_seconds: interval,
           timeout_seconds: timeout,
+          expected_code: expectedCode,
           page: session.current.page,
           page_size: session.current.pageSize,
         },
@@ -435,12 +521,17 @@ export default function App() {
       skipBlank.current = false
       return
     }
-    if (parseSeconds(blankRef.current[field]) != null) {
+    const blankFields = {
+      interval: 'interval_seconds',
+      timeout: 'timeout_seconds',
+      expectedCode: 'expected_code',
+    }
+    const entryField = blankFields[field]
+    if (parseField(entryField, blankRef.current[field]) != null) {
       return
     }
     setBlank((current) => ({ ...current, [field]: blankOrigin.current }))
-    const label = field === 'interval' ? 'Polling rate' : 'Timeout'
-    setPopup({ kind: 'error', message: `${label} must be an integer of at least 1.` })
+    setPopup({ kind: 'error', message: fieldError(entryField) })
   }
 
   function keyBlank(event, field) {
@@ -502,7 +593,7 @@ export default function App() {
         return
       }
     }
-    setStatsEntry({ id: entry.id, url: entry.url })
+    setStatsEntry({ id: entry.id, url: entry.url, timeoutSeconds: entry.timeout_seconds })
   }
 
   function changePageSize(event) {
@@ -519,9 +610,32 @@ export default function App() {
         data-commit="entry"
         data-field={field}
         data-entry-id={entry.id}
+        aria-label={`${FIELD_LIMITS[field].label} for ${entry.url}`}
         value={focused ? draft : String(entry[field])}
         onFocus={() => beginEdit(entry, field)}
         onChange={(event) => setDraft(event.target.value)}
+        onBlur={() => commitField(entry, field)}
+        onKeyDown={onEditKeyDown}
+      />
+    )
+  }
+
+  function boundedInput(entry, field) {
+    const limit = FIELD_LIMITS[field]
+    const focused = editing && editing.id === entry.id && editing.field === field
+    return (
+      <input
+        type="number"
+        min={limit.min}
+        max={limit.max}
+        step={1}
+        data-commit="entry"
+        data-field={field}
+        data-entry-id={entry.id}
+        aria-label={`${limit.label} for ${entry.url}`}
+        value={focused ? draft : String(entry[field])}
+        onFocus={() => beginEdit(entry, field)}
+        onChange={(event) => changeBounded(entry, field, event.target.value)}
         onBlur={() => commitField(entry, field)}
         onKeyDown={onEditKeyDown}
       />
@@ -577,6 +691,7 @@ export default function App() {
             <th>URL</th>
             <th>Polling rate (seconds)</th>
             <th>Timeout (seconds)</th>
+            <th>Expected code</th>
             <th>Play / pause</th>
             <th>Status</th>
             <th>Error</th>
@@ -591,8 +706,9 @@ export default function App() {
             <tr key={entry.id}>
               <td>{entry.id}</td>
               <td title={entry.url}>{displayUrl(entry.url)}</td>
-              <td>{signedIn ? secondsInput(entry, 'interval_seconds') : entry.interval_seconds}</td>
+              <td>{signedIn ? boundedInput(entry, 'interval_seconds') : entry.interval_seconds}</td>
               <td>{signedIn ? secondsInput(entry, 'timeout_seconds') : entry.timeout_seconds}</td>
+              <td>{signedIn ? boundedInput(entry, 'expected_code') : entry.expected_code}</td>
               <td>
                 {signedIn ? (
                   <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => toggle(entry)}>
@@ -665,8 +781,10 @@ export default function App() {
               </td>
               <td>
                 <input
-                  type="text"
-                  inputMode="numeric"
+                  type="number"
+                  min={30}
+                  max={3600}
+                  step={1}
                   value={blank.interval}
                   aria-label="New polling rate"
                   data-commit="blank"
@@ -689,6 +807,22 @@ export default function App() {
                   onChange={(event) => setBlank((current) => ({ ...current, timeout: event.target.value }))}
                   onBlur={() => blurBlankNumber('timeout')}
                   onKeyDown={(event) => keyBlank(event, 'timeout')}
+                />
+              </td>
+              <td>
+                <input
+                  type="number"
+                  min={100}
+                  max={599}
+                  step={1}
+                  value={blank.expectedCode}
+                  aria-label="New expected code"
+                  data-commit="blank"
+                  data-field="expectedCode"
+                  onFocus={() => focusBlank('expectedCode')}
+                  onChange={(event) => setBlank((current) => ({ ...current, expectedCode: event.target.value }))}
+                  onBlur={() => blurBlankNumber('expectedCode')}
+                  onKeyDown={(event) => keyBlank(event, 'expectedCode')}
                 />
               </td>
               <td>URL_PAUSED</td>

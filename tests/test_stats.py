@@ -47,6 +47,7 @@ class IncidentTests(unittest.TestCase):
         result = report([check(0), check(30, "404", 404, 40), check(60)])
         self.assertEqual(result["rows"], [])
         self.assertEqual(result["percentage"], 66.7)
+        self.assertEqual(result["last_polled_at"], "2026-10-10T12:01:00Z")
 
     def test_different_errors_between_ok_results_are_one_incident(self):
         result = report(

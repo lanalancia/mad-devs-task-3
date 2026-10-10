@@ -9,7 +9,7 @@ export class ApiError extends Error {
   }
 }
 
-export async function api(path, { method = 'GET', token = '', body } = {}) {
+export async function api(path, { method = 'GET', token = '', body, timeoutMs = 5000 } = {}) {
   const headers = { Accept: 'application/json' }
   if (body !== undefined) {
     headers['Content-Type'] = 'application/json'
@@ -23,7 +23,7 @@ export async function api(path, { method = 'GET', token = '', body } = {}) {
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(timeoutMs),
     })
   } catch (error) {
     if (error?.name === 'TimeoutError' || error?.name === 'AbortError') {

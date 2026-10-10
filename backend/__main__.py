@@ -8,8 +8,10 @@ import threading
 from datetime import datetime, timedelta, timezone
 
 from backend.config import load_http_config
-from backend.db import DatabaseError, connect, ensure_schema, insert_history, load_active_entries
-from backend.polling import format_console, is_due, run_cycle
+from backend.db import DatabaseError, connect, ensure_schema, load_active_entries
+from backend.entries import EntryError
+from backend.poll_control import PollControl
+from backend.polling import is_due
 from backend.server import ApiServer
 
 TICK_SECONDS = 1.0
@@ -37,7 +39,8 @@ def main() -> None:
         connection.close()
         sys.exit(1)
     try:
-        server = ApiServer(port, jwt_secret)
+        control = PollControl()
+        server = ApiServer(port, jwt_secret, control)
     except OSError as exc:
         print(f"Cannot listen on port {port}: {exc}")
         print("Exiting.")
@@ -48,7 +51,7 @@ def main() -> None:
     thread = threading.Thread(target=server.serve_forever, name="http", daemon=True)
     thread.start()
     try:
-        asyncio.run(supervise(connection))
+        asyncio.run(supervise(connection, control))
     except KeyboardInterrupt:
         print("Stopped.")
     finally:
@@ -57,8 +60,8 @@ def main() -> None:
         connection.close()
 
 
-async def supervise(connection) -> None:
-    inflight: set[int] = set()
+async def supervise(connection, control: PollControl) -> None:
+    control.attach(asyncio.get_running_loop(), connection)
     invalid: set[int] = set()
     while True:
         try:
@@ -68,9 +71,10 @@ async def supervise(connection) -> None:
             await asyncio.sleep(TICK_SECONDS)
             continue
         now = datetime.now(timezone.utc)
+        running = control.running_ids()
         for entry in entries:
             entry_id = entry["id"]
-            if entry_id in inflight:
+            if entry_id in running:
                 continue
             if not _usable(entry, invalid):
                 continue
@@ -79,32 +83,11 @@ async def supervise(connection) -> None:
                 last_polled_at = last_polled_at.replace(tzinfo=timezone.utc)
             if not is_due(last_polled_at, entry["interval_seconds"], now):
                 continue
-            inflight.add(entry_id)
-            task = asyncio.create_task(_poll(connection, entry))
-            task.add_done_callback(lambda _task, entry_id=entry_id: inflight.discard(entry_id))
-        await asyncio.sleep(_sleep_seconds(entries, inflight, now))
-
-
-async def _poll(connection, entry: dict) -> None:
-    try:
-        started_at, duration_ms, outcome = await asyncio.to_thread(
-            run_cycle,
-            entry["url"],
-            entry["timeout_seconds"],
-            entry["expected_code"],
-        )
-        insert_history(
-            connection,
-            entry["id"],
-            started_at,
-            outcome.http_status,
-            duration_ms,
-            outcome.message,
-        )
-    except Exception as exc:
-        print(f"Failed to save the result for {entry['url']}: {exc}")
-        return
-    print(format_console(entry["url"], outcome.http_status, outcome.message))
+            try:
+                control.request_now(dict(entry))
+            except EntryError as exc:
+                print(f"Failed to start the poll for {entry['url']}: {exc}")
+        await asyncio.sleep(_sleep_seconds(entries, control.running_ids(), now))
 
 
 def _usable(entry: dict, invalid: set[int]) -> bool:

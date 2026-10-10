@@ -12,6 +12,10 @@ from backend.urls import UrlError, normalize_url
 
 PAGE_SIZES = (10, 25, 50, 100)
 DEFAULT_EXPECTED_CODE = 200
+MIN_INTERVAL_SECONDS = 30
+MAX_INTERVAL_SECONDS = 3600
+MIN_EXPECTED_CODE = 100
+MAX_EXPECTED_CODE = 599
 
 
 class EntryError(Exception):
@@ -60,6 +64,28 @@ def require_page_size(value: object) -> int:
 def require_seconds(value: object, label: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise EntryError(f"{label} must be an integer of at least 1.")
+    return value
+
+
+def require_interval(value: object) -> int:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < MIN_INTERVAL_SECONDS
+        or value > MAX_INTERVAL_SECONDS
+    ):
+        raise EntryError("Polling rate must be an integer from 30 to 3600.")
+    return value
+
+
+def require_expected_code(value: object) -> int:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < MIN_EXPECTED_CODE
+        or value > MAX_EXPECTED_CODE
+    ):
+        raise EntryError("Expected code must be an integer from 100 to 599.")
     return value
 
 
@@ -117,6 +143,7 @@ def load_page(connection: psycopg.Connection, page: int, page_size: int) -> dict
                 poll_entries.url,
                 poll_entries.timeout_seconds,
                 poll_entries.interval_seconds,
+                poll_entries.expected_code,
                 poll_entries.status,
                 poll_entries.group_id,
                 poll_groups.paused AS group_paused,
@@ -164,6 +191,7 @@ def save_new_entry(
     timeout_seconds: int,
     page: int,
     page_size: int,
+    expected_code: int = DEFAULT_EXPECTED_CODE,
 ) -> tuple[str, dict | None]:
     """Create or restore a URL. exists means the caller should reject it."""
     try:
@@ -183,7 +211,7 @@ def save_new_entry(
                     )
                     VALUES (%s, %s, %s, %s, 'PAUSED')
                     """,
-                    (url, timeout_seconds, interval_seconds, DEFAULT_EXPECTED_CODE),
+                    (url, timeout_seconds, interval_seconds, expected_code),
                 )
             else:
                 updated = connection.execute(
@@ -191,11 +219,12 @@ def save_new_entry(
                     UPDATE poll_entries
                     SET timeout_seconds = %s,
                         interval_seconds = %s,
+                        expected_code = %s,
                         status = 'PAUSED'
                     WHERE url = %s AND status = 'DELETED'
                     RETURNING id
                     """,
-                    (timeout_seconds, interval_seconds, url),
+                    (timeout_seconds, interval_seconds, expected_code, url),
                 )
                 restored = updated.fetchone()
                 if restored is None:
@@ -215,6 +244,7 @@ def update_entry(
     page: int,
     page_size: int,
     submitted: str | None = None,
+    expected_code: int = DEFAULT_EXPECTED_CODE,
 ) -> dict | None:
     with connection.transaction():
         current = connection.execute(
@@ -232,10 +262,11 @@ def update_entry(
             UPDATE poll_entries
             SET interval_seconds = %s,
                 timeout_seconds = %s,
+                expected_code = %s,
                 status = %s
             WHERE id = %s AND status <> 'DELETED'
             """,
-            (interval_seconds, timeout_seconds, status, current["id"]),
+            (interval_seconds, timeout_seconds, expected_code, status, current["id"]),
         )
         if updated.rowcount != 1:
             return None
@@ -331,6 +362,21 @@ def _stored_url(connection: psycopg.Connection, normalized: str, submitted: str 
     return raw
 
 
+def load_poll_target(connection: psycopg.Connection, entry_id: int) -> dict | None:
+    """One check that can be polled now, including a paused URL or a paused group."""
+    row = connection.execute(
+        """
+        SELECT id, url, timeout_seconds, interval_seconds, expected_code, status
+        FROM poll_entries
+        WHERE id = %s AND status <> 'DELETED'
+        """,
+        (entry_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return dict(row)
+
+
 def _record_event(connection: psycopg.Connection, poll_entry_id: int, kind: str) -> None:
     connection.execute(
         """
@@ -352,6 +398,7 @@ def _serialize(row: dict) -> dict:
         "url": row["url"],
         "interval_seconds": row["interval_seconds"],
         "timeout_seconds": row["timeout_seconds"],
+        "expected_code": row["expected_code"],
         "status": row["status"],
         "group_id": row["group_id"],
         "poll_state": poll_state(row["status"], row["group_paused"]),

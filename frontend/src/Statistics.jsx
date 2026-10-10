@@ -171,6 +171,37 @@ export default function Statistics({ entry, token, onAuthRequired, onSignedOut }
     }
   }
 
+  async function pollNow() {
+    const current = query.current
+    if (!current.token) {
+      onAuthRequired()
+      return
+    }
+    const timeoutSeconds = Number(entry.timeoutSeconds) || 5
+    try {
+      await api('/api/entries/poll', {
+        method: 'POST',
+        token: current.token,
+        body: { id: current.entryId },
+        timeoutMs: (timeoutSeconds * 2 + 5) * 1000,
+      })
+      if (!mounted.current) {
+        return
+      }
+      await load()
+    } catch (error) {
+      if (!mounted.current) {
+        return
+      }
+      if (error?.code === 'token_expired') {
+        onSignedOut()
+        onAuthRequired()
+        return
+      }
+      setPopup({ kind: 'error', message: error.message || 'Request failed.' })
+    }
+  }
+
   useEffect(() => {
     if (!token) {
       return undefined
@@ -315,6 +346,12 @@ export default function Statistics({ entry, token, onAuthRequired, onSignedOut }
           />{' '}
           Refresh every 10 seconds
         </label>
+      </div>
+      <p>Last poll (UTC): {formatUtc(shown?.last_polled_at) || 'not polled yet'}</p>
+      <div className="stats-controls">
+        <button type="button" onClick={pollNow}>
+          Poll now
+        </button>
       </div>
       {popup?.kind === 'error' ? (
         <div className="popup-backdrop">
