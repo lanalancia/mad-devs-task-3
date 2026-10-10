@@ -89,7 +89,6 @@ input[type='datetime-local'] {
 .chart {
   display: block;
   margin-top: 8px;
-  width: 500px;
   max-width: 100%;
   height: auto;
 }

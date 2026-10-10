@@ -9,7 +9,7 @@ import psycopg
 from backend.entries import EntryError, clamp_page
 
 WINDOWS = {"day": 24, "week": 24 * 7, "month": 24 * 30}
-GRAPH_DOTS = 500
+GRAPH_CHECKS = 100
 GAP_EXTRA_SECONDS = 60
 REASONS = {
     "paused": "polling was paused",
@@ -73,111 +73,38 @@ def load_statistics(
     if entry is None:
         return None
     moment = now or datetime.now(timezone.utc)
-    fetch_start, fetch_end = statistics_fetch_range(window, day_from, day_to, moment)
-    checks = _load_checks(connection, entry_id, fetch_start, fetch_end)
-    events = _load_events(connection, entry_id, checks, fetch_start, fetch_end)
-    report = build_statistics(
-        checks=checks,
-        events=events,
-        interval_seconds=entry["interval_seconds"],
-        window=window,
-        day_from=day_from,
-        day_to=day_to,
-        page=page,
-        page_size=page_size,
-        now=moment,
+    day_from, day_to, range_start, range_end = _resolved_dates(day_from, day_to, moment)
+    window_start = moment - timedelta(hours=WINDOWS[window])
+    percentage, average_ms = _window_summary(connection, entry_id, window_start, moment)
+    points, max_ms, slots = _recent_graph(connection, entry_id, entry["interval_seconds"], moment)
+    journal, total, page = _journal(
+        connection,
+        entry_id,
+        entry["interval_seconds"],
+        range_start,
+        range_end,
+        page,
+        page_size,
+        moment,
     )
-    report["id"] = entry["id"]
-    report["url"] = entry["url"]
     last_polled_at, last_duration_ms = _latest_poll(connection, entry_id)
-    report["last_polled_at"] = last_polled_at
-    report["last_duration_ms"] = last_duration_ms
-    return report
-
-
-def _load_checks(
-    connection: psycopg.Connection,
-    entry_id: int,
-    fetch_start: datetime,
-    fetch_end: datetime,
-) -> list[dict]:
-    """Checks inside the span, plus the nearest one on each side."""
-    previous = connection.execute(
-        """
-        SELECT id, polled_at, http_status, duration_ms, message
-        FROM poll_history
-        WHERE poll_entry_id = %s AND polled_at < %s
-        ORDER BY polled_at DESC, id DESC
-        LIMIT 1
-        """,
-        (entry_id, fetch_start),
-    ).fetchone()
-    inside = connection.execute(
-        """
-        SELECT id, polled_at, http_status, duration_ms, message
-        FROM poll_history
-        WHERE poll_entry_id = %s AND polled_at >= %s AND polled_at < %s
-        ORDER BY polled_at, id
-        """,
-        (entry_id, fetch_start, fetch_end),
-    ).fetchall()
-    following = connection.execute(
-        """
-        SELECT id, polled_at, http_status, duration_ms, message
-        FROM poll_history
-        WHERE poll_entry_id = %s AND polled_at >= %s
-        ORDER BY polled_at, id
-        LIMIT 1
-        """,
-        (entry_id, fetch_end),
-    ).fetchone()
-    rows: list[dict] = []
-    if previous is not None:
-        rows.append(dict(previous))
-    rows.extend(dict(row) for row in inside)
-    if following is not None:
-        rows.append(dict(following))
-    return rows
-
-
-def _load_events(
-    connection: psycopg.Connection,
-    entry_id: int,
-    checks: list[dict],
-    fetch_start: datetime,
-    fetch_end: datetime,
-) -> list[dict]:
-    """Events that can label a gap, including the state already in effect at the start."""
-    if checks:
-        event_from = min(_aware(row["polled_at"]) for row in checks)
-        event_to = max(_aware(row["polled_at"]) for row in checks)
-    else:
-        event_from = fetch_start
-        event_to = fetch_end
-    anchor = connection.execute(
-        """
-        SELECT id, kind, happened_at
-        FROM poll_entry_events
-        WHERE poll_entry_id = %s AND happened_at <= %s
-        ORDER BY happened_at DESC, id DESC
-        LIMIT 1
-        """,
-        (entry_id, event_from),
-    ).fetchone()
-    later = connection.execute(
-        """
-        SELECT id, kind, happened_at
-        FROM poll_entry_events
-        WHERE poll_entry_id = %s AND happened_at > %s AND happened_at <= %s
-        ORDER BY happened_at, id
-        """,
-        (entry_id, event_from, event_to),
-    ).fetchall()
-    rows: list[dict] = []
-    if anchor is not None:
-        rows.append(dict(anchor))
-    rows.extend(dict(row) for row in later)
-    return rows
+    return {
+        "id": entry["id"],
+        "url": entry["url"],
+        "window": window,
+        "percentage": percentage,
+        "average_ms": average_ms,
+        "graph": {"max_ms": max_ms, "slots": slots, "points": points},
+        "from": day_from.isoformat(),
+        "to": day_to.isoformat(),
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "last_polled_at": last_polled_at,
+        "last_duration_ms": last_duration_ms,
+        "open_incident_seconds": _open_incident_seconds(connection, entry_id, entry["interval_seconds"], moment),
+        "rows": journal,
+    }
 
 
 def _latest_poll(connection: psycopg.Connection, entry_id: int) -> tuple[str | None, int | None]:
@@ -230,14 +157,14 @@ def build_statistics(
     page = clamp_page(page, page_size, total)
     start_index = (page - 1) * page_size
     visible = rows[start_index : start_index + page_size]
-    points, max_ms = _graph(in_window, incidents, gaps, window_start, now)
+    points, max_ms, slots = _graph(ordered, incidents, gaps)
     last = ordered[-1] if ordered else None
     open_incident = next((row for row in reversed(incidents) if row["end"] is None), None)
     return {
         "window": window,
         "percentage": None if not in_window else round(100 * successful / len(in_window), 1),
         "average_ms": None if not responded else int(round(sum(responded) / len(responded))),
-        "graph": {"max_ms": max_ms, "points": points},
+        "graph": {"max_ms": max_ms, "slots": slots, "points": points},
         "from": day_from.isoformat(),
         "to": day_to.isoformat(),
         "page": page,
@@ -312,6 +239,505 @@ def _incidents(checks: list[dict], interval_seconds: int, now: datetime) -> list
 def incident_bounds(checks: list[dict], interval_seconds: int, now: datetime) -> list[dict]:
     """Same incidents as the statistics journal. end is None while one is open."""
     return _incidents(checks, interval_seconds, now)
+
+
+def load_incident_bounds(
+    connection: psycopg.Connection,
+    entry_id: int,
+    interval_seconds: int,
+    now: datetime,
+) -> list[dict]:
+    """Incidents for the whole history, without loading every check into Python."""
+    rows = _incident_rows(connection, entry_id, interval_seconds, bounded=False, range_start=now, range_end=now)
+    for row in rows:
+        row["duration_seconds"] = _duration(row["start"], row["end"], _aware(now))
+    return rows
+
+
+def _window_summary(
+    connection: psycopg.Connection,
+    entry_id: int,
+    window_start: datetime,
+    window_end: datetime,
+) -> tuple[float | None, int | None]:
+    row = connection.execute(
+        """
+        SELECT
+            COUNT(*) AS total,
+            COUNT(*) FILTER (WHERE message = 'OK') AS successful,
+            AVG(duration_ms) FILTER (WHERE http_status IS NOT NULL) AS average_ms
+        FROM poll_history
+        WHERE poll_entry_id = %s AND polled_at >= %s AND polled_at <= %s
+        """,
+        (entry_id, window_start, window_end),
+    ).fetchone()
+    total = row["total"]
+    percentage = None if not total else round(100 * row["successful"] / total, 1)
+    average = row["average_ms"]
+    average_ms = None if average is None else int(round(float(average)))
+    return percentage, average_ms
+
+
+def _recent_graph(
+    connection: psycopg.Connection,
+    entry_id: int,
+    interval_seconds: int,
+    now: datetime,
+) -> tuple[list[dict], int, int]:
+    rows = connection.execute(
+        """
+        SELECT id, polled_at, http_status, duration_ms, message
+        FROM poll_history
+        WHERE poll_entry_id = %s
+        ORDER BY polled_at DESC, id DESC
+        LIMIT %s
+        """,
+        (entry_id, GRAPH_CHECKS),
+    ).fetchall()
+    ordered = sorted(
+        ({**row, "polled_at": _aware(row["polled_at"])} for row in rows),
+        key=lambda row: (row["polled_at"], row["id"]),
+    )
+    incidents = _incidents(ordered, interval_seconds, now)
+    gaps = _gaps(ordered, [], interval_seconds)
+    return _graph(ordered, incidents, gaps)
+
+
+def _journal(
+    connection: psycopg.Connection,
+    entry_id: int,
+    interval_seconds: int,
+    range_start: datetime,
+    range_end: datetime,
+    page: int,
+    page_size: int,
+    now: datetime,
+) -> tuple[list[dict], int, int]:
+    incidents, gaps = _journal_sources(
+        connection,
+        entry_id,
+        interval_seconds,
+        range_start,
+        range_end,
+    )
+    rows = []
+    for incident in incidents:
+        if not _overlaps(incident, range_start, range_end):
+            continue
+        incident["duration_seconds"] = _duration(incident["start"], incident["end"], now)
+        incident["reason"] = ", ".join(_group_label(group) for group in incident["groups"])
+        rows.append(incident)
+    rows.extend(gap for gap in gaps if _overlaps(gap, range_start, range_end))
+    rows.sort(key=lambda row: row["start"], reverse=True)
+    total = len(rows)
+    page = clamp_page(page, page_size, total)
+    start_index = (page - 1) * page_size
+    visible = rows[start_index : start_index + page_size]
+    return [_serialize_row(row) for row in visible], total, page
+
+
+def _open_incident_seconds(
+    connection: psycopg.Connection,
+    entry_id: int,
+    interval_seconds: int,
+    now: datetime,
+) -> int | None:
+    latest = connection.execute(
+        """
+        SELECT polled_at, message
+        FROM poll_history
+        WHERE poll_entry_id = %s
+        ORDER BY polled_at DESC, id DESC
+        LIMIT 1
+        """,
+        (entry_id,),
+    ).fetchone()
+    if latest is None or latest["message"] == "OK":
+        return None
+    last_ok = connection.execute(
+        """
+        SELECT polled_at
+        FROM poll_history
+        WHERE poll_entry_id = %s AND message = 'OK' AND polled_at < %s
+        ORDER BY polled_at DESC, id DESC
+        LIMIT 1
+        """,
+        (entry_id, latest["polled_at"]),
+    ).fetchone()
+    range_start = _aware(last_ok["polled_at"]) if last_ok is not None else datetime.min.replace(tzinfo=timezone.utc)
+    incidents = _incident_rows(
+        connection,
+        entry_id,
+        interval_seconds,
+        bounded=True,
+        range_start=range_start,
+        range_end=now + timedelta(seconds=1),
+    )
+    open_incident = next((row for row in reversed(incidents) if row["end"] is None), None)
+    if open_incident is None:
+        return None
+    return _duration(open_incident["start"], None, now)
+
+
+def _incident_rows(
+    connection: psycopg.Connection,
+    entry_id: int,
+    interval_seconds: int,
+    *,
+    bounded: bool,
+    range_start: datetime,
+    range_end: datetime,
+) -> list[dict]:
+    rows = connection.execute(
+        _INCIDENT_SQL,
+        {
+            "entry_id": entry_id,
+            "bounded": bounded,
+            "range_start": range_start,
+            "range_end": range_end,
+            "gap_seconds": _gap_seconds(interval_seconds),
+        },
+    ).fetchall()
+    return [_incident_record(row) for row in rows]
+
+
+def _journal_sources(
+    connection: psycopg.Connection,
+    entry_id: int,
+    interval_seconds: int,
+    range_start: datetime,
+    range_end: datetime,
+) -> tuple[list[dict], list[dict]]:
+    """Incidents and gap bounds from one pass over the selected history."""
+    rows = connection.execute(
+        _SPAN_SQL,
+        {
+            "entry_id": entry_id,
+            "bounded": True,
+            "range_start": range_start,
+            "range_end": range_end,
+            "gap_seconds": _gap_seconds(interval_seconds),
+        },
+    ).fetchall()
+    incidents = [_incident_record(row) for row in rows if row["kind"] == "incident"]
+    pairs = [row for row in rows if row["kind"] == "gap"]
+    return incidents, _labeled_gaps(connection, entry_id, interval_seconds, pairs)
+
+
+def _incident_record(row: dict) -> dict:
+    groups = row["groups"] or []
+    return {
+        "kind": "incident",
+        "start": _aware(row["started_at"]),
+        "end": None if row["ended_at"] is None else _aware(row["ended_at"]),
+        "groups": [
+            {
+                "status": group["status"],
+                "message": group["message"],
+                "count": group["count"],
+            }
+            for group in groups
+        ],
+    }
+
+
+def _labeled_gaps(
+    connection: psycopg.Connection,
+    entry_id: int,
+    interval_seconds: int,
+    pairs: list[dict],
+) -> list[dict]:
+    if not pairs:
+        return []
+    events = _events_between(
+        connection,
+        entry_id,
+        min(_aware(row["started_at"]) for row in pairs),
+        max(_aware(row["ended_at"]) for row in pairs),
+    )
+    found: list[dict] = []
+    for row in pairs:
+        found.extend(
+            _gap_segments(
+                _aware(row["started_at"]),
+                _aware(row["ended_at"]),
+                interval_seconds,
+                events,
+            )
+        )
+    return found
+
+
+def _events_between(
+    connection: psycopg.Connection,
+    entry_id: int,
+    event_from: datetime,
+    event_to: datetime,
+) -> list[dict]:
+    anchor = connection.execute(
+        """
+        SELECT id, kind, happened_at
+        FROM poll_entry_events
+        WHERE poll_entry_id = %s AND happened_at <= %s
+        ORDER BY happened_at DESC, id DESC
+        LIMIT 1
+        """,
+        (entry_id, event_from),
+    ).fetchone()
+    later = connection.execute(
+        """
+        SELECT id, kind, happened_at
+        FROM poll_entry_events
+        WHERE poll_entry_id = %s AND happened_at > %s AND happened_at <= %s
+        ORDER BY happened_at, id
+        """,
+        (entry_id, event_from, event_to),
+    ).fetchall()
+    rows = []
+    if anchor is not None:
+        rows.append(dict(anchor))
+    rows.extend(dict(row) for row in later)
+    for row in rows:
+        row["happened_at"] = _aware(row["happened_at"])
+    return rows
+
+
+def _gap_seconds(interval_seconds: int) -> float:
+    return 2 * interval_seconds + GAP_EXTRA_SECONDS
+
+
+_CHECKS_CTE = """
+WITH before_row AS (
+    SELECT id, polled_at, http_status, message
+    FROM poll_history
+    WHERE poll_entry_id = %(entry_id)s
+      AND %(bounded)s
+      AND polled_at < %(range_start)s
+    ORDER BY polled_at DESC, id DESC
+    LIMIT 1
+),
+after_row AS (
+    SELECT id, polled_at, http_status, message
+    FROM poll_history
+    WHERE poll_entry_id = %(entry_id)s
+      AND %(bounded)s
+      AND polled_at >= %(range_end)s
+    ORDER BY polled_at, id
+    LIMIT 1
+),
+checks AS (
+    SELECT id, polled_at, http_status, message FROM before_row
+    UNION ALL
+    SELECT id, polled_at, http_status, message
+    FROM poll_history
+    WHERE poll_entry_id = %(entry_id)s
+      AND (
+          NOT %(bounded)s
+          OR (polled_at >= %(range_start)s AND polled_at < %(range_end)s)
+      )
+    UNION ALL
+    SELECT id, polled_at, http_status, message FROM after_row
+),
+ordered AS (
+    SELECT
+        id,
+        polled_at,
+        http_status,
+        message,
+        lag(polled_at) OVER w AS prev_at,
+        lag(message) OVER w AS prev_message,
+        lead(polled_at) OVER w AS next_at,
+        lead(message) OVER w AS next_message
+    FROM checks
+    WINDOW w AS (ORDER BY polled_at, id)
+)
+"""
+
+_INCIDENT_SQL = (
+    _CHECKS_CTE
+    + """
+,
+failures AS (
+    SELECT
+        id,
+        polled_at,
+        http_status,
+        message,
+        next_at,
+        next_message,
+        SUM(
+            CASE
+                WHEN prev_at IS NULL
+                  OR prev_message = 'OK'
+                  OR EXTRACT(EPOCH FROM (polled_at - prev_at)) >= %(gap_seconds)s
+                THEN 1
+                ELSE 0
+            END
+        ) OVER (ORDER BY polled_at, id) AS run_id
+    FROM ordered
+    WHERE message <> 'OK'
+),
+runs AS (
+    SELECT
+        run_id,
+        MIN(polled_at) AS started_at,
+        MAX(polled_at) AS last_at,
+        (ARRAY_AGG(next_at ORDER BY polled_at DESC, id DESC))[1] AS next_at,
+        (ARRAY_AGG(next_message ORDER BY polled_at DESC, id DESC))[1] AS next_message
+    FROM failures
+    GROUP BY run_id
+    HAVING COUNT(*) >= 2
+)
+SELECT
+    runs.started_at,
+    CASE
+        WHEN runs.next_message = 'OK'
+         AND EXTRACT(EPOCH FROM (runs.next_at - runs.last_at)) < %(gap_seconds)s
+        THEN runs.next_at
+        WHEN runs.next_at IS NOT NULL THEN runs.last_at
+        ELSE NULL
+    END AS ended_at,
+    (
+        SELECT jsonb_agg(
+            jsonb_build_object(
+                'status', grouped.http_status,
+                'message', grouped.message,
+                'count', grouped.count
+            )
+            ORDER BY grouped.first_id
+        )
+        FROM (
+            SELECT
+                http_status,
+                message,
+                COUNT(*) AS count,
+                MIN(id) AS first_id
+            FROM failures
+            WHERE failures.run_id = runs.run_id
+            GROUP BY http_status, message
+        ) AS grouped
+    ) AS groups
+FROM runs
+"""
+)
+
+_SPAN_SQL = """
+WITH before_row AS (
+    SELECT id, polled_at, http_status, message
+    FROM poll_history
+    WHERE poll_entry_id = %(entry_id)s
+      AND %(bounded)s
+      AND polled_at < %(range_start)s
+    ORDER BY polled_at DESC, id DESC
+    LIMIT 1
+),
+after_row AS (
+    SELECT id, polled_at, http_status, message
+    FROM poll_history
+    WHERE poll_entry_id = %(entry_id)s
+      AND %(bounded)s
+      AND polled_at >= %(range_end)s
+    ORDER BY polled_at, id
+    LIMIT 1
+),
+checks AS (
+    SELECT id, polled_at, http_status, message FROM before_row
+    UNION ALL
+    SELECT id, polled_at, http_status, message
+    FROM poll_history
+    WHERE poll_entry_id = %(entry_id)s
+      AND (
+          NOT %(bounded)s
+          OR (polled_at >= %(range_start)s AND polled_at < %(range_end)s)
+      )
+    UNION ALL
+    SELECT id, polled_at, http_status, message FROM after_row
+),
+ordered AS MATERIALIZED (
+    SELECT
+        id,
+        polled_at,
+        http_status,
+        message,
+        lag(polled_at) OVER w AS prev_at,
+        lag(message) OVER w AS prev_message,
+        lead(polled_at) OVER w AS next_at,
+        lead(message) OVER w AS next_message
+    FROM checks
+    WINDOW w AS (ORDER BY polled_at, id)
+),
+failures AS (
+    SELECT
+        id,
+        polled_at,
+        http_status,
+        message,
+        next_at,
+        next_message,
+        SUM(
+            CASE
+                WHEN prev_at IS NULL
+                  OR prev_message = 'OK'
+                  OR EXTRACT(EPOCH FROM (polled_at - prev_at)) >= %(gap_seconds)s
+                THEN 1
+                ELSE 0
+            END
+        ) OVER (ORDER BY polled_at, id) AS run_id
+    FROM ordered
+    WHERE message <> 'OK'
+),
+runs AS (
+    SELECT
+        run_id,
+        MIN(polled_at) AS started_at,
+        MAX(polled_at) AS last_at,
+        (ARRAY_AGG(next_at ORDER BY polled_at DESC, id DESC))[1] AS next_at,
+        (ARRAY_AGG(next_message ORDER BY polled_at DESC, id DESC))[1] AS next_message
+    FROM failures
+    GROUP BY run_id
+    HAVING COUNT(*) >= 2
+)
+SELECT
+    'incident' AS kind,
+    runs.started_at,
+    CASE
+        WHEN runs.next_message = 'OK'
+         AND EXTRACT(EPOCH FROM (runs.next_at - runs.last_at)) < %(gap_seconds)s
+        THEN runs.next_at
+        WHEN runs.next_at IS NOT NULL THEN runs.last_at
+        ELSE NULL
+    END AS ended_at,
+    (
+        SELECT jsonb_agg(
+            jsonb_build_object(
+                'status', grouped.http_status,
+                'message', grouped.message,
+                'count', grouped.count
+            )
+            ORDER BY grouped.first_id
+        )
+        FROM (
+            SELECT
+                http_status,
+                message,
+                COUNT(*) AS count,
+                MIN(id) AS first_id
+            FROM failures
+            WHERE failures.run_id = runs.run_id
+            GROUP BY http_status, message
+        ) AS grouped
+    ) AS groups
+FROM runs
+UNION ALL
+SELECT
+    'gap' AS kind,
+    prev_at AS started_at,
+    polled_at AS ended_at,
+    NULL AS groups
+FROM ordered
+WHERE prev_at IS NOT NULL
+  AND EXTRACT(EPOCH FROM (polled_at - prev_at)) >= %(gap_seconds)s
+"""
 
 
 def _gaps(checks: list[dict], events: list[dict], interval_seconds: int) -> list[dict]:
@@ -392,31 +818,20 @@ def _graph(
     checks: list[dict],
     incidents: list[dict],
     gaps: list[dict],
-    window_start: datetime,
-    window_end: datetime,
-) -> tuple[list[dict], int]:
-    span = (window_end - window_start).total_seconds()
-    buckets: list[list[int]] = [[] for _ in range(GRAPH_DOTS)]
-    if span > 0:
-        for row in checks:
-            if row["http_status"] is None:
-                continue
-            offset = (row["polled_at"] - window_start).total_seconds()
-            if offset < 0 or offset > span:
-                continue
-            slot = min(GRAPH_DOTS - 1, int(offset / span * GRAPH_DOTS))
-            buckets[slot].append(row["duration_ms"])
+) -> tuple[list[dict], int, int]:
+    """One point per recent check. Timeouts stay off the line and keep their slot."""
+    series = checks[-GRAPH_CHECKS:]
     points: list[dict] = []
-    for slot, samples in enumerate(buckets):
-        if not samples:
+    for slot, row in enumerate(series):
+        if row["http_status"] is None:
             continue
-        at = window_start + timedelta(seconds=span * slot / GRAPH_DOTS)
+        at = row["polled_at"]
         previous = points[-1]["at"] if points else None
         connect = previous is not None and not _crosses(previous, at, incidents, gaps)
         points.append(
             {
                 "slot": slot,
-                "ms": int(round(sum(samples) / len(samples))),
+                "ms": int(row["duration_ms"]),
                 "connect": connect,
                 "at": at,
             }
@@ -426,7 +841,7 @@ def _graph(
         {"slot": point["slot"], "ms": point["ms"], "connect": point["connect"]}
         for point in points
     ]
-    return serialized, max(1000, peak)
+    return serialized, max(1000, peak), len(series)
 
 
 def _crosses(previous: datetime, current: datetime, incidents: list[dict], gaps: list[dict]) -> bool:

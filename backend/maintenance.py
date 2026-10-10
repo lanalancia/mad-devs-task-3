@@ -14,7 +14,7 @@ from backend.mail import (
     merge_windows,
     started_message,
 )
-from backend.stats import incident_bounds
+from backend.stats import load_incident_bounds
 
 EDGES = ("started", "ended")
 
@@ -299,19 +299,20 @@ def reconcile_entry(connection: psycopg.Connection, entry_id: int, now: datetime
         return
     if not isinstance(entry["interval_seconds"], int) or entry["interval_seconds"] < 1:
         return
-    checks = connection.execute(
-        """
-        SELECT polled_at, http_status, message
-        FROM poll_history
-        WHERE poll_entry_id = %s
-        ORDER BY polled_at, id
-        """,
-        (entry_id,),
-    ).fetchall()
-    incidents = incident_bounds(list(checks), entry["interval_seconds"], now)
+    incidents = load_incident_bounds(connection, entry_id, entry["interval_seconds"], now)
     windows = _windows_for(connection, entry_id, entry["group_id"])
     addresses = _addresses(connection, entry_id)
-    latest_poll = checks[-1]["polled_at"] if checks else None
+    latest = connection.execute(
+        """
+        SELECT polled_at
+        FROM poll_history
+        WHERE poll_entry_id = %s
+        ORDER BY polled_at DESC, id DESC
+        LIMIT 1
+        """,
+        (entry_id,),
+    ).fetchone()
+    latest_poll = None if latest is None else latest["polled_at"]
     for incident in incidents:
         plan = letter_plan(incident["start"], incident["end"], windows, now)
         stored = _mail_state(connection, entry_id, incident["start"])

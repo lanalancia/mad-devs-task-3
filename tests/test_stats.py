@@ -129,8 +129,19 @@ class GapTests(unittest.TestCase):
                 check(300, duration=90),
             ]
         )
-        self.assertEqual(len(result["graph"]["points"]), 2)
+        self.assertEqual(result["graph"]["slots"], 4)
+        self.assertEqual([point["slot"] for point in result["graph"]["points"]], [0, 1, 2, 3])
         self.assertFalse(result["graph"]["points"][1]["connect"])
+        self.assertFalse(result["graph"]["points"][3]["connect"])
+
+    def test_the_graph_keeps_only_the_last_100_checks(self):
+        checks = [check(index * 30, duration=100 + index) for index in range(120)]
+        result = report(checks)
+        points = result["graph"]["points"]
+        self.assertEqual(result["graph"]["slots"], 100)
+        self.assertEqual(len(points), 100)
+        self.assertEqual(points[0]["ms"], 120)
+        self.assertEqual(points[-1]["ms"], 219)
 
     def test_a_point_above_1000_ms_raises_the_scale(self):
         result = report([check(0, duration=2500)])

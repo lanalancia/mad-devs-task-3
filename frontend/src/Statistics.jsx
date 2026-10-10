@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { api } from './api.js'
 
 const PAGE_SIZES = [10, 25, 50, 100]
-const GRAPH_DOTS = 500
+const POINT_PX = 5
+const STATS_TIMEOUT_MS = 15000
 const WINDOWS = [
   { id: 'day', label: 'Day' },
   { id: 'week', label: 'Week' },
@@ -87,11 +88,12 @@ function groupText(group) {
 function ResponseChart({ graph }) {
   const maxMs = graph?.max_ms ?? 1000
   const points = graph?.points ?? []
-  const width = GRAPH_DOTS
+  const slots = Math.max(graph?.slots || points.length || 1, 1)
+  const width = Math.max((slots - 1) * POINT_PX, 0) + 4
   const top = 8
   const bottom = 148
   const height = 160
-  const xFor = (slot) => (slot / (GRAPH_DOTS - 1)) * (width - 1)
+  const xFor = (slot) => slot * POINT_PX + 2
   const yFor = (ms) => bottom - (Math.min(ms, maxMs) / maxMs) * (bottom - top)
   const segments = []
   let current = []
@@ -171,7 +173,7 @@ export default function Statistics({ entry, token, onAuthRequired, onSignedOut }
       page_size: String(current.pageSize),
     })
     try {
-      const data = await api(`/api/stats?${params}`, { token: current.token })
+      const data = await api(`/api/stats?${params}`, { token: current.token, timeoutMs: STATS_TIMEOUT_MS })
       if (!mounted.current || seen !== generation.current) {
         return
       }
@@ -263,7 +265,7 @@ export default function Statistics({ entry, token, onAuthRequired, onSignedOut }
         Successful checks: {formatPercent(shown?.percentage)} Average response time:{' '}
         {formatAverage(shown?.average_ms)}
       </p>
-      <p>Response time, 0–{shown?.graph?.max_ms ?? 1000} ms</p>
+      <p>Last 100 checks, 0–{shown?.graph?.max_ms ?? 1000} ms</p>
       <ResponseChart graph={shown?.graph} />
       <div className="stats-controls">
         <label>

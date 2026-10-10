@@ -3,7 +3,7 @@ Tech stack:
 **Backend:**
 Python. Should be good enough for this task. 
 
-**Frontend: **
+**Frontend:**
 React. I choose it because many devs are familiar with it.
 Vite: AI chose it for me, to host a website. Will look into it later.
 
