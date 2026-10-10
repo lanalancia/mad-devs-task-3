@@ -13,7 +13,7 @@ for future tasks
 - Potential long load time if we have too much incidents in history. Should be fixed, need tests.
 - "maintenance scheduled"
 - Configurable public page for guests 
-- For url info: how long is it down, how long is response time  
-- Localhosted fake websites with various bahavior 
-- SMPT and email
+- For url info: how long is it down, how long is response time  **DONE**
+- Localhosted fake websites with various bahavior **DONE**
+- Fake SMTP
 

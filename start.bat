@@ -12,12 +12,16 @@ echo.
 set /p CHOICE=Start service: 
 if "%CHOICE%"=="1" goto start_backend
 if "%CHOICE%"=="2" goto start_frontend
-if "%CHOICE%"=="3" goto unavailable
+if "%CHOICE%"=="3" goto start_mocks
 echo Unknown service. Enter 1, 2, or 3.
 goto menu
 
-:unavailable
-echo This service is not available in this step.
+:start_mocks
+call :ensure_venv
+if errorlevel 1 goto menu
+echo Starting mock websites on ports 17781-17784.
+.venv\Scripts\python.exe -m mock_sites
+echo Mock websites stopped.
 goto menu
 
 :start_backend

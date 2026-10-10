@@ -19,5 +19,33 @@
     "polling_rate": 30,
     "expected_code": 200,
     "polling_status": "ACTIVE"
+  },
+  {
+    "url": "http://localhost:17781",
+    "timeout": 5,
+    "polling_rate": 30,
+    "expected_code": 200,
+    "polling_status": "ACTIVE"
+  },
+  {
+    "url": "http://localhost:17782",
+    "timeout": 5,
+    "polling_rate": 30,
+    "expected_code": 200,
+    "polling_status": "ACTIVE"
+  },
+  {
+    "url": "http://localhost:17783",
+    "timeout": 5,
+    "polling_rate": 30,
+    "expected_code": 200,
+    "polling_status": "ACTIVE"
+  },
+  {
+    "url": "http://localhost:17784",
+    "timeout": 5,
+    "polling_rate": 30,
+    "expected_code": 200,
+    "polling_status": "ACTIVE"
   }
 ]

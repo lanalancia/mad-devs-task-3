@@ -89,7 +89,9 @@ def load_statistics(
     )
     report["id"] = entry["id"]
     report["url"] = entry["url"]
-    report["last_polled_at"] = _latest_poll(connection, entry_id)
+    last_polled_at, last_duration_ms = _latest_poll(connection, entry_id)
+    report["last_polled_at"] = last_polled_at
+    report["last_duration_ms"] = last_duration_ms
     return report
 
 
@@ -178,10 +180,10 @@ def _load_events(
     return rows
 
 
-def _latest_poll(connection: psycopg.Connection, entry_id: int) -> str | None:
+def _latest_poll(connection: psycopg.Connection, entry_id: int) -> tuple[str | None, int | None]:
     row = connection.execute(
         """
-        SELECT polled_at
+        SELECT polled_at, duration_ms
         FROM poll_history
         WHERE poll_entry_id = %s
         ORDER BY polled_at DESC, id DESC
@@ -190,8 +192,8 @@ def _latest_poll(connection: psycopg.Connection, entry_id: int) -> str | None:
         (entry_id,),
     ).fetchone()
     if row is None:
-        return None
-    return _iso(_aware(row["polled_at"]))
+        return None, None
+    return _iso(_aware(row["polled_at"])), row["duration_ms"]
 
 
 def build_statistics(
@@ -229,6 +231,8 @@ def build_statistics(
     start_index = (page - 1) * page_size
     visible = rows[start_index : start_index + page_size]
     points, max_ms = _graph(in_window, incidents, gaps, window_start, now)
+    last = ordered[-1] if ordered else None
+    open_incident = next((row for row in reversed(incidents) if row["end"] is None), None)
     return {
         "window": window,
         "percentage": None if not in_window else round(100 * successful / len(in_window), 1),
@@ -239,7 +243,9 @@ def build_statistics(
         "page": page,
         "page_size": page_size,
         "total": total,
-        "last_polled_at": _iso(ordered[-1]["polled_at"]) if ordered else None,
+        "last_polled_at": _iso(last["polled_at"]) if last else None,
+        "last_duration_ms": last["duration_ms"] if last else None,
+        "open_incident_seconds": None if open_incident is None else open_incident["duration_seconds"],
         "rows": [_serialize_row(row) for row in visible],
     }
 

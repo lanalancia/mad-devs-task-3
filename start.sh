@@ -63,6 +63,13 @@ start_backend() {
     echo "Backend stopped."
 }
 
+start_mocks() {
+    ensure_venv || return 0
+    echo "Starting mock websites on ports 17781-17784."
+    .venv/bin/python -m mock_sites || true
+    echo "Mock websites stopped."
+}
+
 start_frontend() {
     if ! command -v node >/dev/null 2>&1; then
         echo "Node.js is required to start the frontend."
@@ -96,7 +103,7 @@ while true; do
     case "$choice" in
         1) start_backend ;;
         2) start_frontend ;;
-        3) echo "This service is not available in this step." ;;
+        3) start_mocks ;;
         *) echo "Unknown service. Enter 1, 2, or 3." ;;
     esac
 done

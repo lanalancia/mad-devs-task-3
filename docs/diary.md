@@ -98,3 +98,12 @@ planned out bug fixes and "poll now" feature. Executing
 Decide to not do SMTP and email. Instead there will be a history of fake "email sent" events in group page. 
 It's just because it's time to send it already and i don't want to ask to move the deadline. 
 So for now I only need fake testable websites, scheduled maintenace and fill the docs
+
+
+19:16 
+made plan for task #7: mock websites for testing
+
+19:41 
+task 7 works. I now have fake websites
+Also planning for both maintenance and email.
+For easier access, will make a special page "maintenances", that will let to set up a maintenance for both groups and URLs

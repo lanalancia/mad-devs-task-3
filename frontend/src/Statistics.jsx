@@ -57,6 +57,26 @@ function formatAverage(value) {
   return `${value} ms`
 }
 
+function incidentLine(shown) {
+  if (!shown) {
+    return ''
+  }
+  if (shown.open_incident_seconds == null) {
+    return 'no incidents right now'
+  }
+  return `Down for ${formatDuration(shown.open_incident_seconds)}`
+}
+
+function responseLine(shown) {
+  if (!shown) {
+    return ''
+  }
+  if (shown.last_duration_ms == null) {
+    return 'Last response time: not polled yet'
+  }
+  return `Last response time: ${shown.last_duration_ms} ms`
+}
+
 function groupText(group) {
   if (group.status == null || String(group.status) === group.message) {
     return group.message
@@ -348,6 +368,8 @@ export default function Statistics({ entry, token, onAuthRequired, onSignedOut }
         </label>
       </div>
       <p>Last poll (UTC): {formatUtc(shown?.last_polled_at) || 'not polled yet'}</p>
+      <p>{incidentLine(shown)}</p>
+      <p>{responseLine(shown)}</p>
       <div className="stats-controls">
         <button type="button" onClick={pollNow}>
           Poll now

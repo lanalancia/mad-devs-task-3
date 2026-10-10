@@ -99,6 +99,20 @@ class PageTests(unittest.TestCase):
         self.assertEqual(normalized[0], "https://www.google.com")
         self.assertFalse(normalized[1].endswith("/"))
         self.assertEqual(normalized[2], "http://localhost:17777")
+        self.assertEqual(
+            normalized[3:],
+            [
+                "http://localhost:17781",
+                "http://localhost:17782",
+                "http://localhost:17783",
+                "http://localhost:17784",
+            ],
+        )
+        for item in payload[3:]:
+            self.assertEqual(item["timeout"], 5)
+            self.assertEqual(item["polling_rate"], 30)
+            self.assertEqual(item["expected_code"], 200)
+            self.assertEqual(item["polling_status"], "ACTIVE")
 
     def test_status_changes_that_are_logged(self):
         self.assertEqual(status_event("ACTIVE", "PAUSED"), "paused")

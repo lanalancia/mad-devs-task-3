@@ -167,6 +167,8 @@ class EntryDatabaseTests(unittest.TestCase):
             [("2026-09-30T23:59:30Z", "2026-10-01T00:00:30Z")],
         )
         self.assertEqual(report["last_polled_at"], "2026-10-13T00:00:00Z")
+        self.assertEqual(report["last_duration_ms"], 10)
+        self.assertIsNone(report["open_incident_seconds"])
 
     def event_kinds(self, entry_id: int) -> list[str]:
         rows = self.connection.execute(

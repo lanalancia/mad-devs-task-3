@@ -141,6 +141,56 @@ class GapTests(unittest.TestCase):
             report([check(0)], day_from=BASE.date(), day_to=BASE.date() - timedelta(days=1))
 
 
+class CurrentOutageTests(unittest.TestCase):
+    def test_one_failure_is_not_an_open_incident(self):
+        result = report([check(0), check(30, "404", 404, 300)])
+        self.assertIsNone(result["open_incident_seconds"])
+        self.assertEqual(result["last_duration_ms"], 300)
+
+    def test_an_open_incident_reports_its_duration(self):
+        result = report([check(0), check(30, "404", 404, 40), check(60, "500", 500, 80)])
+        self.assertEqual(result["open_incident_seconds"], int((NOW - at(30)).total_seconds()))
+        self.assertEqual(result["last_duration_ms"], 80)
+
+    def test_a_closed_incident_is_not_current(self):
+        result = report(
+            [check(0), check(30, "404", 404), check(60, "404", 404), check(90, duration=15)]
+        )
+        self.assertIsNone(result["open_incident_seconds"])
+        self.assertEqual(result["last_duration_ms"], 15)
+
+    def test_no_polls_leave_both_fields_empty(self):
+        result = report([])
+        self.assertIsNone(result["last_duration_ms"])
+        self.assertIsNone(result["open_incident_seconds"])
+        self.assertIsNone(result["last_polled_at"])
+
+    def test_the_open_incident_stays_when_another_page_is_open(self):
+        result = report(
+            [
+                check(0),
+                check(30, "404", 404),
+                check(60, "404", 404),
+                check(90),
+                check(120, "500", 500),
+                check(150, "500", 500),
+            ],
+            page=2,
+            page_size=1,
+        )
+        self.assertIsNotNone(result["rows"][0]["end"])
+        self.assertEqual(result["open_incident_seconds"], int((NOW - at(120)).total_seconds()))
+
+    def test_the_open_incident_stays_outside_the_selected_dates(self):
+        result = report(
+            [check(0), check(30, "404", 404), check(60, "500", 500)],
+            day_from=date(2026, 1, 1),
+            day_to=date(2026, 1, 2),
+        )
+        self.assertEqual(result["rows"], [])
+        self.assertEqual(result["open_incident_seconds"], int((NOW - at(30)).total_seconds()))
+
+
 class FetchRangeTests(unittest.TestCase):
     def test_the_span_covers_the_graph_and_the_journal(self):
         now = datetime(2026, 10, 10, 12, 0, tzinfo=timezone.utc)
