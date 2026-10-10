@@ -77,3 +77,4 @@ Received and tested task 4.
 Now every entry has the graph for response time statistics, incidents history, and reason for incidents too
 Note: it looks like, it don't know the difference between incident and pause
 Note: log out on page refresh
+
