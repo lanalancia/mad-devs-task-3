@@ -11,6 +11,7 @@ from backend.auth import issue_token, read_token
 from backend.db import DatabaseError, connect
 from backend.entries import (
     EntryError,
+    assign_group,
     authenticate,
     delete_entry,
     load_page,
@@ -23,6 +24,21 @@ from backend.entries import (
     require_url,
     save_new_entry,
     update_entry,
+)
+from backend.groups import (
+    GroupError,
+    create_group,
+    delete_email,
+    delete_group,
+    load_groups,
+    require_email,
+    require_email_id,
+    require_group_id,
+    require_group_name,
+    require_paused,
+    save_email,
+    update_email,
+    update_group,
 )
 from backend.stats import load_statistics, parse_day, require_window
 
@@ -59,6 +75,9 @@ class ApiHandler(BaseHTTPRequestHandler):
         if path == "/api/stats":
             self._stats(query)
             return
+        if path == "/api/groups":
+            self._groups()
+            return
         if path != "/api/entries":
             self._send_json(404, {"error": "Not found."})
             return
@@ -81,10 +100,31 @@ class ApiHandler(BaseHTTPRequestHandler):
         if path == "/api/entries/delete":
             self._delete()
             return
+        if path == "/api/entries/group":
+            self._assign_group()
+            return
+        if path == "/api/groups":
+            self._create_group()
+            return
+        if path == "/api/groups/delete":
+            self._delete_group()
+            return
+        if path == "/api/groups/emails":
+            self._save_email()
+            return
+        if path == "/api/groups/emails/delete":
+            self._delete_email()
+            return
         self._send_json(404, {"error": "Not found."})
 
     def do_PATCH(self) -> None:
         path, _query = _split(self.path)
+        if path == "/api/groups":
+            self._update_group()
+            return
+        if path == "/api/groups/emails":
+            self._update_email()
+            return
         if path != "/api/entries":
             self._send_json(404, {"error": "Not found."})
             return
@@ -230,6 +270,166 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         self._with_db(run)
 
+    def _groups(self) -> None:
+        user, failure = self._user()
+        if user is None:
+            self._auth_error(failure)
+            return
+        self._with_db(lambda connection: self._send_json(200, load_groups(connection)))
+
+    def _create_group(self) -> None:
+        user, failure = self._user()
+        if user is None:
+            self._auth_error(failure)
+            return
+        try:
+            payload = self._body()
+            name = require_group_name(payload.get("name"))
+        except (EntryError, GroupError) as exc:
+            self._send_json(400, {"error": str(exc)})
+            return
+
+        def run(connection):
+            self._send_json(200, create_group(connection, name))
+
+        self._with_db(run)
+
+    def _update_group(self) -> None:
+        user, failure = self._user()
+        if user is None:
+            self._auth_error(failure)
+            return
+        try:
+            payload = self._body()
+            group_id = require_group_id(payload.get("id"))
+            name = require_group_name(payload["name"]) if "name" in payload else None
+            paused = require_paused(payload["paused"]) if "paused" in payload else None
+        except (EntryError, GroupError) as exc:
+            self._send_json(400, {"error": str(exc)})
+            return
+
+        def run(connection):
+            updated = update_group(connection, group_id, name, paused)
+            if updated is None:
+                self._send_json(404, {"error": "Group not found."})
+                return
+            self._send_json(200, updated)
+
+        self._with_db(run)
+
+    def _delete_group(self) -> None:
+        user, failure = self._user()
+        if user is None:
+            self._auth_error(failure)
+            return
+        try:
+            payload = self._body()
+            group_id = require_group_id(payload.get("id"))
+        except (EntryError, GroupError) as exc:
+            self._send_json(400, {"error": str(exc)})
+            return
+
+        def run(connection):
+            updated = delete_group(connection, group_id)
+            if updated is None:
+                self._send_json(404, {"error": "Group not found."})
+                return
+            self._send_json(200, updated)
+
+        self._with_db(run)
+
+    def _save_email(self) -> None:
+        user, failure = self._user()
+        if user is None:
+            self._auth_error(failure)
+            return
+        try:
+            payload = self._body()
+            group_id = require_group_id(payload.get("group_id"))
+            address = require_email(payload.get("address"))
+        except (EntryError, GroupError) as exc:
+            self._send_json(400, {"error": str(exc)})
+            return
+
+        def run(connection):
+            updated = save_email(connection, group_id, address)
+            if updated is None:
+                self._send_json(404, {"error": "Group not found."})
+                return
+            self._send_json(200, updated)
+
+        self._with_db(run)
+
+    def _update_email(self) -> None:
+        user, failure = self._user()
+        if user is None:
+            self._auth_error(failure)
+            return
+        try:
+            payload = self._body()
+            email_id = require_email_id(payload.get("id"))
+            address = require_email(payload.get("address"))
+        except (EntryError, GroupError) as exc:
+            self._send_json(400, {"error": str(exc)})
+            return
+
+        def run(connection):
+            updated = update_email(connection, email_id, address)
+            if updated is None:
+                self._send_json(404, {"error": "Email not found."})
+                return
+            self._send_json(200, updated)
+
+        self._with_db(run)
+
+    def _delete_email(self) -> None:
+        user, failure = self._user()
+        if user is None:
+            self._auth_error(failure)
+            return
+        try:
+            payload = self._body()
+            email_id = require_email_id(payload.get("id"))
+        except (EntryError, GroupError) as exc:
+            self._send_json(400, {"error": str(exc)})
+            return
+
+        def run(connection):
+            updated = delete_email(connection, email_id)
+            if updated is None:
+                self._send_json(404, {"error": "Email not found."})
+                return
+            self._send_json(200, updated)
+
+        self._with_db(run)
+
+    def _assign_group(self) -> None:
+        user, failure = self._user()
+        if user is None:
+            self._auth_error(failure)
+            return
+        try:
+            payload = self._body()
+            url = require_saved_url(payload.get("url"))
+            if "group_id" not in payload:
+                raise EntryError("Group id is required.")
+            raw_group = payload.get("group_id")
+            group_id = None if raw_group is None else require_group_id(raw_group)
+            page = require_page(payload.get("page"))
+            page_size = require_page_size(payload.get("page_size"))
+        except (EntryError, GroupError) as exc:
+            self._send_json(400, {"error": str(exc)})
+            return
+
+        def run(connection):
+            updated = assign_group(connection, url, group_id, page, page_size)
+            if updated is None:
+                self._send_json(404, {"error": "Entry not found."})
+                return
+            self._send_json(200, updated)
+
+        self._with_db(run)
+
     def _user(self) -> tuple[str | None, str]:
         header = self.headers.get("Authorization", "")
         if not header.startswith("Bearer "):
@@ -277,7 +477,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             return
         try:
             action(connection)
-        except EntryError as exc:
+        except (EntryError, GroupError) as exc:
             self._send_json(400, {"error": str(exc)})
         except Exception as exc:
             print(f"HTTP request failed: {exc}")

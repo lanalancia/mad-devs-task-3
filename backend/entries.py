@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import psycopg
 
 from backend.auth import passwords_match
+from backend.groups import poll_state
 from backend.urls import UrlError, normalize_url
 
 PAGE_SIZES = (10, 25, 50, 100)
@@ -117,9 +118,12 @@ def load_page(connection: psycopg.Connection, page: int, page_size: int) -> dict
                 poll_entries.timeout_seconds,
                 poll_entries.interval_seconds,
                 poll_entries.status,
+                poll_entries.group_id,
+                poll_groups.paused AS group_paused,
                 latest.polled_at AS last_polled_at,
                 latest.message AS last_message
             FROM poll_entries
+            LEFT JOIN poll_groups ON poll_groups.id = poll_entries.group_id
             LEFT JOIN LATERAL (
                 SELECT polled_at, message
                 FROM poll_history
@@ -272,6 +276,45 @@ def delete_entry(
     return load_page(connection, page, page_size)
 
 
+def assign_group(
+    connection: psycopg.Connection,
+    url: str,
+    group_id: int | None,
+    page: int,
+    page_size: int,
+) -> dict | None:
+    """Point a visible URL at a group. None clears it. Deleting the URL keeps the value."""
+    with connection.transaction():
+        current = connection.execute(
+            """
+            SELECT id
+            FROM poll_entries
+            WHERE url = %s AND status <> 'DELETED'
+            """,
+            (url,),
+        ).fetchone()
+        if current is None:
+            return None
+        if group_id is not None:
+            group = connection.execute(
+                "SELECT id FROM poll_groups WHERE id = %s",
+                (group_id,),
+            ).fetchone()
+            if group is None:
+                raise EntryError("Group not found.")
+        updated = connection.execute(
+            """
+            UPDATE poll_entries
+            SET group_id = %s
+            WHERE id = %s AND status <> 'DELETED'
+            """,
+            (group_id, current["id"]),
+        )
+        if updated.rowcount != 1:
+            return None
+    return load_page(connection, page, page_size)
+
+
 def _stored_url(connection: psycopg.Connection, normalized: str, submitted: str | None) -> str:
     """Keep a saved address that could not be rewritten to the normalized form."""
     if not isinstance(submitted, str):
@@ -310,6 +353,8 @@ def _serialize(row: dict) -> dict:
         "interval_seconds": row["interval_seconds"],
         "timeout_seconds": row["timeout_seconds"],
         "status": row["status"],
+        "group_id": row["group_id"],
+        "poll_state": poll_state(row["status"], row["group_paused"]),
         "health": health,
         "error": error,
         "last_polled_at": _iso(last_polled_at),

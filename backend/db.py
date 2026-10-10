@@ -82,6 +82,7 @@ def ensure_schema(connection: psycopg.Connection) -> None:
         )
     _ensure_deleted_status(connection)
     _ensure_events_table(connection)
+    _ensure_groups(connection)
     _normalize_stored_urls(connection)
 
 
@@ -132,6 +133,44 @@ def _ensure_events_table(connection: psycopg.Connection) -> None:
     )
 
 
+def _ensure_groups(connection: psycopg.Connection) -> None:
+    """Add groups on databases created before they existed."""
+    if not _columns(connection, "poll_groups"):
+        connection.execute(
+            """
+            CREATE TABLE poll_groups (
+                id bigserial PRIMARY KEY,
+                name text NOT NULL UNIQUE CHECK (char_length(name) BETWEEN 1 AND 50),
+                paused boolean NOT NULL DEFAULT false
+            )
+            """
+        )
+    if not _columns(connection, "poll_group_emails"):
+        connection.execute(
+            """
+            CREATE TABLE poll_group_emails (
+                id bigserial PRIMARY KEY,
+                poll_group_id bigint NOT NULL REFERENCES poll_groups (id) ON DELETE CASCADE,
+                address text NOT NULL,
+                UNIQUE (poll_group_id, address)
+            )
+            """
+        )
+    if "group_id" not in _columns(connection, "poll_entries"):
+        connection.execute(
+            """
+            ALTER TABLE poll_entries
+            ADD COLUMN group_id bigint REFERENCES poll_groups (id) ON DELETE SET NULL
+            """
+        )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS poll_entries_group_id_idx
+            ON poll_entries (group_id)
+        """
+    )
+
+
 def _normalize_stored_urls(connection: psycopg.Connection) -> None:
     """Rewrite saved addresses into the same form new entries use."""
     rows = connection.execute("SELECT id, url FROM poll_entries").fetchall()
@@ -164,7 +203,9 @@ def load_active_entries(connection: psycopg.Connection) -> list[dict]:
             MAX(poll_history.polled_at) AS last_polled_at
         FROM poll_entries
         LEFT JOIN poll_history ON poll_history.poll_entry_id = poll_entries.id
+        LEFT JOIN poll_groups ON poll_groups.id = poll_entries.group_id
         WHERE poll_entries.status = 'ACTIVE'
+          AND COALESCE(poll_groups.paused, false) = false
         GROUP BY poll_entries.id
         ORDER BY poll_entries.id
         """

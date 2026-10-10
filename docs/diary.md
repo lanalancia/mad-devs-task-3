@@ -81,3 +81,15 @@ Note: log out on page refresh
 16:49
 Planned task #5, grouping the urls. 
 This will allow to assign urls to groupsa and mass pause them. And also will add the groupp emails array.
+
+17:13
+Tested groups. 
+Adding and removing email, adding and removing group and to group - works
+Statuses update as planned
+pausing only group, only url and mixed - works correctly
+
+17:47
+Working on next big piece. Decide to not work on "expected error message", and limit it to "expected error code"
+
+18:05
+planned out bug fixes and "poll now" feature. Executing

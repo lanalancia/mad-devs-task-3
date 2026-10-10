@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from './api.js'
+import Groups from './Groups.jsx'
 import Statistics from './Statistics.jsx'
 
 const PAGE_SIZES = [10, 25, 50, 100]
@@ -20,10 +21,6 @@ function nextPollTitle(iso) {
     return 'Next poll: not polled yet'
   }
   return `Next poll: ${formatUtc(iso)}`
-}
-
-function pollLabel(status) {
-  return status === 'ACTIVE' ? 'polling' : 'paused'
 }
 
 function displayUrl(url) {
@@ -51,6 +48,8 @@ export default function App() {
   const [loginUser, setLoginUser] = useState('')
   const [loginPassword, setLoginPassword] = useState('')
   const [statsEntry, setStatsEntry] = useState(null)
+  const [view, setView] = useState('urls')
+  const [groupOptions, setGroupOptions] = useState([])
 
   const skipCommit = useRef(false)
   const skipBlank = useRef(false)
@@ -61,10 +60,12 @@ export default function App() {
   const entriesRef = useRef(entries)
   const draftRef = useRef(draft)
   const session = useRef({ token: '', page: 1, pageSize: 10 })
+  const groupsRef = useRef(groupOptions)
   blankRef.current = blank
   entriesRef.current = entries
   draftRef.current = draft
   session.current = { token, page, pageSize }
+  groupsRef.current = groupOptions
 
   const pageCount = Math.max(1, Math.ceil(total / pageSize))
   const signedIn = Boolean(token)
@@ -121,6 +122,95 @@ export default function App() {
       clearInterval(timer)
     }
   }, [page, pageSize])
+
+  useEffect(() => {
+    function applyHash() {
+      const wantsGroups = window.location.hash === '#groups'
+      if (wantsGroups && !session.current.token) {
+        window.history.replaceState(null, '', window.location.pathname + window.location.search)
+        setView('urls')
+        return
+      }
+      if (wantsGroups) {
+        setStatsEntry(null)
+      }
+      setView(wantsGroups ? 'groups' : 'urls')
+    }
+
+    applyHash()
+    window.addEventListener('hashchange', applyHash)
+    return () => window.removeEventListener('hashchange', applyHash)
+  }, [token])
+
+  useEffect(() => {
+    if (!token) {
+      setGroupOptions([])
+      return
+    }
+    let active = true
+
+    async function load() {
+      try {
+        const data = await api('/api/groups', { token: session.current.token })
+        if (active) {
+          setGroupOptions(data.groups)
+        }
+      } catch (error) {
+        if (active) {
+          showRequestError(error)
+        }
+      }
+    }
+
+    load()
+    const timer = setInterval(load, REFRESH_MS)
+    return () => {
+      active = false
+      clearInterval(timer)
+    }
+  }, [token])
+
+  function nextPollState(status, groupId) {
+    if (status !== 'ACTIVE') {
+      return 'URL_PAUSED'
+    }
+    const group = groupsRef.current.find((item) => item.id === groupId)
+    if (group?.paused) {
+      return 'GROUP_PAUSED'
+    }
+    return 'ACTIVE'
+  }
+
+  async function assignGroup(entry, raw) {
+    const groupId = raw === '' ? null : Number(raw)
+    const previous = entriesRef.current
+    setEntries(
+      previous.map((item) =>
+        item.id === entry.id
+          ? { ...item, group_id: groupId, poll_state: nextPollState(item.status, groupId) }
+          : item,
+      ),
+    )
+    generation.current += 1
+    try {
+      const data = await api('/api/entries/group', {
+        method: 'POST',
+        token: session.current.token,
+        body: {
+          url: entry.url,
+          group_id: groupId,
+          page: session.current.page,
+          page_size: session.current.pageSize,
+        },
+      })
+      generation.current += 1
+      applyPage(data)
+    } catch (error) {
+      generation.current += 1
+      setEntries(previous)
+      showRequestError(error)
+    }
+  }
 
   async function sendUpdate(entry, interval, timeout, status) {
     generation.current += 1
@@ -390,6 +480,9 @@ export default function App() {
     setUsername('')
     setEditing(null)
     setPopup(null)
+    if (window.location.hash === '#groups') {
+      window.location.hash = ''
+    }
   }
 
   function requireSignIn() {
@@ -439,6 +532,12 @@ export default function App() {
     <>
       <header className="top">
         <div>
+          {view === 'groups' && signedIn ? (
+            <button type="button" onClick={() => { window.location.hash = '' }}>
+              URLs
+            </button>
+          ) : null}
+          {signedIn && view !== 'groups' && !statsEntry ? <a href="#groups">Groups</a> : null}
           {statsEntry ? (
             <button type="button" onClick={() => setStatsEntry(null)}>
               Return to main
@@ -460,7 +559,8 @@ export default function App() {
           )}
         </div>
       </header>
-      {statsEntry ? (
+      {view === 'groups' && signedIn ? <Groups token={token} onError={showRequestError} /> : null}
+      {view !== 'groups' && statsEntry ? (
         <Statistics
           entry={statsEntry}
           token={token}
@@ -468,7 +568,7 @@ export default function App() {
           onSignedOut={logout}
         />
       ) : null}
-      {statsEntry ? null : (
+      {view !== 'groups' && !statsEntry ? (
       <>
       <table>
         <thead>
@@ -481,6 +581,7 @@ export default function App() {
             <th>Status</th>
             <th>Error</th>
             <th>Last poll (UTC)</th>
+            {signedIn ? <th>Group</th> : null}
             {signedIn ? <th>Delete</th> : null}
             {signedIn ? <th>Statistics</th> : null}
           </tr>
@@ -497,13 +598,29 @@ export default function App() {
                   <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => toggle(entry)}>
                     {entry.status === 'ACTIVE' ? 'Pause' : 'Play'}
                   </button>
-                ) : (
-                  pollLabel(entry.status)
-                )}
+                ) : null}
+                {signedIn ? ' ' : null}
+                {entry.poll_state}
               </td>
               <td>{entry.health}</td>
               <td>{entry.error}</td>
               <td title={nextPollTitle(entry.next_poll_at)}>{formatUtc(entry.last_polled_at)}</td>
+              {signedIn ? (
+                <td>
+                  <select
+                    aria-label={`Group for ${entry.url}`}
+                    value={entry.group_id == null ? '' : String(entry.group_id)}
+                    onChange={(event) => assignGroup(entry, event.target.value)}
+                  >
+                    <option value="">NONE</option>
+                    {groupOptions.map((group) => (
+                      <option key={group.id} value={String(group.id)}>
+                        {group.name}
+                      </option>
+                    ))}
+                  </select>
+                </td>
+              ) : null}
               {signedIn ? (
                 <td>
                   <button
@@ -574,7 +691,8 @@ export default function App() {
                   onKeyDown={(event) => keyBlank(event, 'timeout')}
                 />
               </td>
-              <td>paused</td>
+              <td>URL_PAUSED</td>
+              <td />
               <td />
               <td />
               <td />
@@ -606,7 +724,7 @@ export default function App() {
         </button>
       </div>
       </>
-      )}
+      ) : null}
       {popup ? (
         <div className="popup-backdrop">
           <div className="popup" role="dialog">

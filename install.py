@@ -23,7 +23,7 @@ CONFIG_PATH = ROOT / "config.ini"
 SCHEMA_PATH = ROOT / "backend" / "schema.sql"
 POLL_ENTRIES_PATH = ROOT / "init-poll-entries.json"
 USERS_PATH = ROOT / "init-users.json"
-APPLICATION_TABLES = ("poll_entries", "poll_history", "users")
+APPLICATION_TABLES = ("poll_entries", "poll_history", "poll_groups", "poll_group_emails", "users")
 
 DEFAULTS = {
     "host": "localhost",
@@ -401,12 +401,13 @@ def setup_application_database(user: str, database: str) -> bool:
         print("Application tables already exist: " + ", ".join(present) + ".")
         if not ask_yes_no(
             "Reinstall the database on this step? "
-            "This deletes poll entries, history, and users, then loads the seed again"
+            "This deletes poll entries, history, groups, and users, then loads the seed again"
         ):
             print("Existing tables left unchanged.")
             return True
         dropping = (
-            "DROP TABLE IF EXISTS poll_entry_events, poll_history, poll_entries, users CASCADE;\n"
+            "DROP TABLE IF EXISTS poll_group_emails, poll_entry_events, poll_history, "
+            "poll_entries, poll_groups, users CASCADE;\n"
         )
     try:
         schema = SCHEMA_PATH.read_text(encoding="utf-8")
