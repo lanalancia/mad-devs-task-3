@@ -2,7 +2,7 @@ Developer's diary.
 
 
 GMT+4
-10.09.2026
+09.10.2026
 
 12:47 
 started a project, created a repo. 
@@ -56,3 +56,18 @@ Looks like agent is struggling with tests. later i will give it some playwright
 21:32
 Step 3 completed. Frontend and backend are communicate. Auth works. Creating entries works. Everything else will check tomorrow.
 I rest for today. 
+
+
+GMT+4
+10.10.2026
+
+10:41 
+new day. Testing the completion of of task 2
+Note: backend will not start if docker is not launched
+Note: will not process "url.com" urls. Only works with "http://google.com"
+Note: will treat "http://google.com" and "http://google.com/" as different websites
+Decide to remove trailing slash after domain name, but keep the different pages of a same website. 
+I think this is what task meant: checking the different pages of a same website.
+
+13:54 
+finished planning for "graph" step. Launching agent
